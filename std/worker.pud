@@ -1,0 +1,9 @@
+// std.worker: parallelism with workers. Each worker runs in its own WASM
+// instance with its own heap and communicates only by message passing.
+// Start one with `s.worker(f)` inside a `task.scope`.
+
+/// Inside a worker: receives `In` and sends `Out`.
+pub type Port<In, Out> = __Port<In, Out>
+
+/// Outside a worker: the handle returned by `s.worker(f)`; sends `In` and receives `Out`.
+pub type Worker<In, Out> = __Worker<In, Out>

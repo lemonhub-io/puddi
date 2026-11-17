@@ -64,13 +64,120 @@ function mathOp(op, x, y, env) {
   }
 }
 
-/// Build the import object. `env` provides write(fd, bytes) and host(op, arg).
+/// Thrown into a cancelled task at its next suspension point.
+export class Cancelled extends Error {
+  constructor() {
+    super("cancelled");
+    this.name = "Cancelled";
+    this.puddiCancel = true;
+  }
+}
+
+export const hasJSPI = typeof WebAssembly !== "undefined" && typeof WebAssembly.Suspending === "function" && typeof WebAssembly.promising === "function";
+
+/// Build the import object. `env` provides write(fd, bytes), host(op, arg)
+/// and optionally hostAsync(op, arg) for operations that may return a promise.
 export function makeImports(env, extra = {}) {
   let inst = null;
   let pending = new Uint8Array(0);
   let ok = 1;
   const mem = () => new Uint8Array(inst.exports.memory.buffer);
   const str = (p, n) => dec.decode(mem().subarray(p, p + n));
+  const setResult = (r, good) => {
+    ok = good ? 1 : 0;
+    pending = enc.encode(r == null ? "" : String(r));
+    return pending.length;
+  };
+
+  // ---- tasks: 0 is the main task; children are started by Scope.spawn
+  let cur = 0;
+  let nextTid = 1;
+  const tasks = new Map([[0, { parent: -1, done: false, cancelled: false, reject: null, promise: null }]]);
+  const results = new Map(); // token -> [task, value, ok]
+  let nextTok = 1;
+  let runTask = null;
+  const fatal = (e) => (env.fatal ? env.fatal(e) : setTimeout(() => { throw e; }));
+  const cancelTask = (tid) => {
+    const t = tasks.get(tid);
+    if (!t || t.done || t.cancelled) return;
+    t.cancelled = true;
+    if (t.reject) t.reject(new Cancelled());
+    for (const [id, c] of tasks) if (c.parent === tid) cancelTask(id);
+  };
+  const scheduler = {
+    spawn(runner) {
+      const tid = nextTid++;
+      const t = { parent: cur, done: false, cancelled: false, reject: null, promise: null };
+      tasks.set(tid, t);
+      const prev = cur;
+      cur = tid;
+      let p;
+      try {
+        p = runTask(runner);
+      } catch (e) {
+        p = Promise.reject(e);
+      } finally {
+        cur = prev;
+      }
+      t.promise = Promise.resolve(p).then(
+        () => { t.done = true; },
+        (e) => {
+          t.done = true;
+          if (e && e.puddiCancel) t.cancelled = true;
+          else fatal(e);
+        },
+      );
+      return tid;
+    },
+    cancel: cancelTask,
+    isCancelled: () => !!tasks.get(cur)?.cancelled,
+    current: () => cur,
+    wait(tid) {
+      const t = tasks.get(tid);
+      return t && !t.done ? t.promise : null;
+    },
+  };
+  env.scheduler = scheduler;
+
+  const syncHost = (op, arg) => {
+    switch (op) {
+      case 40: return scheduler.spawn(Number(arg));
+      case 41: scheduler.cancel(Number(arg)); return "";
+      case 42: return scheduler.isCancelled() ? "1" : "0";
+      case 43: if (scheduler.isCancelled()) throw new Cancelled(); return "";
+    }
+    return env.host(op, arg);
+  };
+
+  const hostAsync = (op, p, n) => {
+    const arg = str(p, n);
+    const me = cur;
+    const t = tasks.get(me);
+    const tok = nextTok++;
+    const done = (v, good) => { results.set(tok, [me, v, good]); return tok; };
+    if (t && t.cancelled) throw new Cancelled();
+    let r;
+    try {
+      if (op === 102) r = scheduler.wait(Number(arg)) ?? "";
+      else r = env.hostAsync ? env.hostAsync(op, arg) : env.host(op, arg);
+    } catch (e) {
+      if (e && (e.puddiExit !== undefined || e.puddiCancel)) throw e;
+      return done(e && e.message !== undefined ? e.message : String(e), false);
+    }
+    if (!(r instanceof Promise)) return done(r, true);
+    if (!hasJSPI) throw new Error("this operation needs WebAssembly JSPI (Node.js 24+ or a current browser)");
+    return new Promise((resolve, reject) => {
+      if (t) t.reject = reject;
+      r.then(
+        (v) => resolve(done(v, true)),
+        (e) => {
+          if (e && (e.puddiExit !== undefined || e.puddiCancel)) reject(e);
+          else resolve(done(e && e.message !== undefined ? e.message : String(e), false));
+        },
+      );
+    }).finally(() => { if (t) t.reject = null; });
+  };
+
   const imports = {
     puddi: {
       write(fd, p, n) {
@@ -92,17 +199,19 @@ export function makeImports(env, extra = {}) {
       },
       host(op, p, n) {
         const arg = str(p, n);
-        let r;
         try {
-          r = env.host(op, arg);
-          ok = 1;
+          return setResult(syncHost(op, arg), true);
         } catch (e) {
-          if (e && e.puddiExit !== undefined) throw e;
-          ok = 0;
-          r = e && e.message !== undefined ? e.message : String(e);
+          if (e && (e.puddiExit !== undefined || e.puddiCancel)) throw e;
+          return setResult(e && e.message !== undefined ? e.message : String(e), false);
         }
-        pending = enc.encode(r == null ? "" : String(r));
-        return pending.length;
+      },
+      host_async: hasJSPI ? new WebAssembly.Suspending(hostAsync) : hostAsync,
+      host_claim(tok) {
+        const [task, v, good] = results.get(tok);
+        results.delete(tok);
+        cur = task;
+        return setResult(v, good);
       },
       host_take(p) {
         mem().set(pending, p);
@@ -115,17 +224,24 @@ export function makeImports(env, extra = {}) {
   for (const [mod, fns] of Object.entries(extra)) {
     imports[mod] = imports[mod] || {};
     for (const [name, f] of Object.entries(fns)) {
-      // raw @extern imports receive strings as (ptr, len); wrap so hosts can use JS strings
+      // raw @extern imports receive strings as (ptr, len); hosts can use readStr
       imports[mod][name] = f;
     }
   }
-  return {
+  const api = {
     imports,
+    scheduler,
     bind(instance) {
       inst = instance;
+      const ex = instance.exports;
+      const wrap = (f) => (f && hasJSPI ? WebAssembly.promising(f) : f);
+      runTask = wrap(ex.__run_task);
+      api.call = (name, ...args) => Promise.resolve(wrap(ex[name])(...args));
+      api.callback = wrap(ex.__callback);
     },
     readStr: str,
   };
+  return api;
 }
 
 export function panicMessage(e) {
@@ -163,12 +279,198 @@ function lineWriter(sink) {
   };
 }
 
-/// Browser / generic loader. Returns { instance, run(), exports }.
+// ---------------------------------------------------------------- shared host operations
+
+async function httpFetch(arg) {
+  const [method, url, hdrs, ...rest] = arg.split("\0");
+  const body = rest.join("\0");
+  const headers = {};
+  for (const line of hdrs.split("\n")) {
+    const i = line.indexOf(":");
+    if (i > 0) headers[line.slice(0, i)] = line.slice(i + 1).trim();
+  }
+  const res = await fetch(url, { method, headers, body: method === "GET" || method === "HEAD" ? undefined : body });
+  const text = await res.text();
+  const hs = [...res.headers].map(([k, v]) => `${k}:${v}`).join("\n");
+  return `${res.status}\0${hs}\0${text}`;
+}
+
+function channel() {
+  const inbox = [];
+  const waiters = [];
+  let closed = false;
+  return {
+    push(m) {
+      if (waiters.length) waiters.shift()("1" + m);
+      else inbox.push(m);
+    },
+    close() {
+      closed = true;
+      while (waiters.length) waiters.shift()("");
+    },
+    recv() {
+      if (inbox.length) return "1" + inbox.shift();
+      if (closed) return "";
+      return new Promise((r) => waiters.push(r));
+    },
+  };
+}
+
+/// Worker bookkeeping for the owning instance. `spawn(entry, onMessage)`
+/// creates the platform worker and returns { post(msg), terminate() }.
+function workerHost(spawn) {
+  const workers = new Map();
+  let next = 1;
+  return {
+    start(entry) {
+      const id = next++;
+      const ch = channel();
+      const handle = spawn(entry, (m) => (m.done ? ch.close() : ch.push(m.msg)));
+      workers.set(id, { ch, handle });
+      return String(id);
+    },
+    send(arg) {
+      const i = arg.indexOf("\0");
+      workers.get(Number(arg.slice(0, i))).handle.post({ msg: arg.slice(i + 1) });
+      return "";
+    },
+    recv: (id) => workers.get(id).ch.recv(),
+    close(id) {
+      const w = workers.get(id);
+      if (!w) return "";
+      w.handle.terminate();
+      w.ch.close();
+      workers.delete(id);
+      return "";
+    },
+  };
+}
+
+/// Host operations that work the same everywhere: time, HTTP, tasks and workers.
+function commonOps(ctx) {
+  return {
+    sync(op, arg) {
+      switch (op) {
+        case 50: if (!ctx.workers) throw new Error("workers are not available here"); return ctx.workers.start(Number(arg));
+        case 51: return ctx.workers.send(arg);
+        case 52: return ctx.workers.close(Number(arg));
+        case 53: ctx.port.post({ msg: arg }); return "";
+        case 54: ctx.port.post({ done: true }); return "";
+      }
+      return undefined;
+    },
+    async(op, arg) {
+      switch (op) {
+        case 100: return new Promise((r) => setTimeout(() => r(""), Math.max(0, Number(arg))));
+        case 101: return httpFetch(arg);
+        case 103: return ctx.workers.recv(Number(arg));
+        case 104: return ctx.port.ch.recv();
+      }
+      return undefined;
+    },
+  };
+}
+
+function domOps(api, fatal) {
+  const nodes = [null];
+  const ids = new WeakMap();
+  const events = [null];
+  const id = (n) => {
+    if (!n) return "";
+    let i = ids.get(n);
+    if (i === undefined) {
+      i = nodes.length;
+      nodes.push(n);
+      ids.set(n, i);
+    }
+    return String(i);
+  };
+  const get = (s) => nodes[Number(s)];
+  return (op, arg) => {
+    if (op < 60 || op > 82) return undefined;
+    const a = arg.split("\0");
+    switch (op) {
+      case 60: return id(document.querySelector(arg));
+      case 61: return id(document.createElement(arg));
+      case 62: return get(a[0]).textContent ?? "";
+      case 63: get(a[0]).textContent = a[1]; return "";
+      case 64: { const v = get(a[0]).getAttribute(a[1]); if (v === null) throw new Error("no attribute"); return v; }
+      case 65: get(a[0]).setAttribute(a[1], a[2]); return "";
+      case 66: get(a[0]).append(get(a[1])); return "";
+      case 67: get(a[0]).remove(); return "";
+      case 68: return get(a[0]).value ?? "";
+      case 69: get(a[0]).value = a[1]; return "";
+      case 70: get(a[0]).classList.add(a[1]); return "";
+      case 71: get(a[0]).classList.remove(a[1]); return "";
+      case 72: get(a[0]).innerHTML = a[1]; return "";
+      case 73: {
+        const cb = Number(a[2]);
+        get(a[0]).addEventListener(a[1], (ev) => {
+          const eid = events.length;
+          events.push(ev);
+          Promise.resolve(api.callback(cb, eid)).catch(fatal).finally(() => { events[eid] = null; });
+        });
+        return "";
+      }
+      case 74: return id(document.body);
+      case 75: get(a[0]).style.setProperty(a[1], a[2]); return "";
+      case 76: document.title = arg; return "";
+      case 77: get(a[0]).classList.toggle(a[1]); return "";
+      case 78: return [...document.querySelectorAll(arg)].map(id).join(",");
+      case 79: return id(get(a[0]).querySelector(a[1]));
+      case 80: {
+        const ev = events[Number(a[0])];
+        if (a[1] === "type") return ev.type;
+        if (a[1] === "key") return ev.key ?? "";
+        if (a[1] === "value") return ev.target && ev.target.value !== undefined ? String(ev.target.value) : "";
+        return "";
+      }
+      case 81: return id(events[Number(a[0])].target);
+      case 82: events[Number(a[0])].preventDefault(); return "";
+    }
+    return undefined;
+  };
+}
+
+function exitCodeOf(e) {
+  return e && e.puddiExit !== undefined ? e.puddiExit : null;
+}
+
+/// Browser / generic loader. Returns { instance, exports, run() }; run() resolves to the exit code.
 export async function load(source, opts = {}) {
-  const lw = lineWriter(opts.output || ((fd, line) => (fd === 2 ? console.error(line) : console.log(line))));
+  const output = opts.output || ((fd, line) => (fd === 2 ? console.error(line) : console.log(line)));
+  const lw = lineWriter(output);
+  const fatal = (e) => {
+    lw.flush();
+    const m = panicMessage(e);
+    output(2, m !== null ? `panic: ${m}` : String(e && e.stack ? e.stack : e));
+  };
+  let mod;
+  if (source instanceof WebAssembly.Module) mod = source;
+  else if (typeof source === "string" || source instanceof URL) mod = await WebAssembly.compileStreaming(fetch(source));
+  else mod = await WebAssembly.compile(source);
+  const ctx = {};
+  if (typeof Worker !== "undefined") {
+    ctx.workers = workerHost((entry, onMessage) => {
+      const w = new Worker(import.meta.url, { type: "module" });
+      w.onmessage = (ev) => onMessage(ev.data);
+      w.onerror = (ev) => fatal(ev.message || ev);
+      w.postMessage({ puddiInit: { module: mod, entry } });
+      return { post: (m) => w.postMessage(m), terminate: () => w.terminate() };
+    });
+  }
+  if (opts.port) ctx.port = opts.port;
+  const common = commonOps(ctx);
+  let api;
+  let dom = () => undefined;
   const env = {
+    fatal,
     write: (fd, b) => lw.write(fd, b),
     host(op, arg) {
+      const c = common.sync(op, arg);
+      if (c !== undefined) return c;
+      const d = typeof document !== "undefined" ? dom(op, arg) : undefined;
+      if (d !== undefined) return d;
       if (op === 30) {
         const [lvl, msg] = arg.split("\0");
         (lvl === "error" ? console.error : lvl === "warn" ? console.warn : console.log)(`[${lvl}] ${msg}`);
@@ -177,27 +479,31 @@ export async function load(source, opts = {}) {
       if (opts.host) return opts.host(op, arg);
       throw new Error("host operation not available in this environment");
     },
+    hostAsync(op, arg) {
+      const c = common.async(op, arg);
+      return c !== undefined ? c : env.host(op, arg);
+    },
   };
-  const host = makeImports(env, opts.imports || {});
-  let mod;
-  if (source instanceof WebAssembly.Module) mod = source;
-  else if (typeof source === "string" || source instanceof URL) mod = await WebAssembly.compileStreaming(fetch(source));
-  else mod = await WebAssembly.compile(source);
-  const instance = await WebAssembly.instantiate(mod, host.imports);
-  host.bind(instance);
+  api = makeImports(env, opts.imports || {});
+  dom = domOps(api, fatal);
+  const instance = await WebAssembly.instantiate(mod, api.imports);
+  api.bind(instance);
   return {
     instance,
     exports: instance.exports,
-    run() {
+    call: api.call,
+    async run() {
       try {
-        const code = instance.exports.main ? instance.exports.main() : 0;
+        const code = instance.exports.main ? await api.call("main") : 0;
         lw.flush();
         return code;
       } catch (e) {
         lw.flush();
+        const x = exitCodeOf(e);
+        if (x !== null) return x;
         const m = panicMessage(e);
         if (m !== null) {
-          console.error(`panic: ${m}`);
+          output(2, `panic: ${m}`);
           return 101;
         }
         throw e;
@@ -206,14 +512,26 @@ export async function load(source, opts = {}) {
   };
 }
 
+// Browser worker: the owner posts { puddiInit: { module, entry } } first.
+if (typeof WorkerGlobalScope !== "undefined" && globalThis instanceof WorkerGlobalScope) {
+  const ch = channel();
+  let started = false;
+  globalThis.onmessage = async (ev) => {
+    const d = ev.data;
+    if (!started && d && d.puddiInit) {
+      started = true;
+      const port = { ch, post: (m) => globalThis.postMessage(m) };
+      const app = await load(d.puddiInit.module, { port });
+      await app.call("__worker_entry", d.puddiInit.entry);
+      return;
+    }
+    if (d && d.msg !== undefined) ch.push(d.msg);
+  };
+}
+
 // ---------------------------------------------------------------- Node CLI
 
-async function nodeMain() {
-  const fs = await import("node:fs");
-  const process = globalThis.process;
-  const [cmd, wasmPath, ...rest] = process.argv.slice(2);
-  const bytes = fs.readFileSync(wasmPath);
-  const mod = await WebAssembly.compile(bytes);
+async function nodeEnv(fs, process, wasmPath, rest, ctx) {
   let stdinBuf = Buffer.alloc(0);
   let stdinEof = false;
   const readStdinChunk = () => {
@@ -237,11 +555,25 @@ async function nodeMain() {
     const code = e.code === "ENOENT" ? "NotFound" : e.code === "EACCES" || e.code === "EPERM" ? "PermissionDenied" : e.code === "EEXIST" ? "AlreadyExists" : "Other";
     return new Error(`${code}\0${e.message}`);
   };
+  const common = commonOps(ctx);
   const env = {
     write(fd, b) {
       fs.writeSync(fd, b);
     },
+    fatal(e) {
+      const x = exitCodeOf(e);
+      if (x !== null) process.exit(x);
+      const m = panicMessage(e);
+      fs.writeSync(2, m !== null ? `panic: ${m}\n` : `${e && e.stack ? e.stack : e}\n`);
+      process.exit(m !== null ? 101 : 70);
+    },
+    hostAsync(op, arg) {
+      const c = common.async(op, arg);
+      return c !== undefined ? c : env.host(op, arg);
+    },
     host(op, arg) {
+      const c = common.sync(op, arg);
+      if (c !== undefined) return c;
       try {
         switch (op) {
           case 1: return fs.readFileSync(arg, "utf8");
@@ -301,27 +633,48 @@ async function nodeMain() {
       throw new Error(`unknown host operation ${op}`);
     },
   };
-  const instantiate = async () => {
-    const host = makeImports(env);
-    const instance = await WebAssembly.instantiate(mod, host.imports);
-    host.bind(instance);
-    return instance;
+  return env;
+}
+
+async function nodeInstantiate(mod, env) {
+  const api = makeImports(env);
+  const instance = await WebAssembly.instantiate(mod, api.imports);
+  api.bind(instance);
+  return { instance, api };
+}
+
+async function nodeMain() {
+  const fs = await import("node:fs");
+  const { Worker } = await import("node:worker_threads");
+  const process = globalThis.process;
+  const [cmd, wasmPath, ...rest] = process.argv.slice(2);
+  const mod = await WebAssembly.compile(fs.readFileSync(wasmPath));
+  const ctx = {};
+  ctx.workers = workerHost((entry, onMessage) => {
+    const w = new Worker(new URL(import.meta.url), { workerData: { puddiWorker: true, module: mod, entry, wasmPath, rest }, stdout: false, stderr: false });
+    w.on("message", (m) => (m.fatal !== undefined ? process.exit(m.fatal) : onMessage(m)));
+    w.on("error", (e) => env.fatal(e));
+    return { post: (m) => w.postMessage(m), terminate: () => w.terminate() };
+  });
+  const env = await nodeEnv(fs, process, wasmPath, rest, ctx);
+  const report = (e) => {
+    const x = exitCodeOf(e);
+    if (x !== null) return { code: x };
+    const m = panicMessage(e);
+    if (m === null) throw e;
+    return { code: 101, msg: m };
   };
   if (cmd === "run") {
-    const instance = await instantiate();
+    const { instance, api } = await nodeInstantiate(mod, env);
+    let code = 0;
     try {
-      const code = instance.exports.main ? instance.exports.main() : 0;
-      process.exitCode = code;
+      code = instance.exports.main ? await api.call("main") : 0;
     } catch (e) {
-      if (e && e.puddiExit !== undefined) {
-        process.exitCode = e.puddiExit;
-        return;
-      }
-      const m = panicMessage(e);
-      if (m === null) throw e;
-      fs.writeSync(2, `panic: ${m}\n`);
-      process.exitCode = 101;
+      const r = report(e);
+      if (r.msg !== undefined) fs.writeSync(2, `panic: ${r.msg}\n`);
+      code = r.code;
     }
+    process.exit(code);
   } else if (cmd === "test") {
     const tests = JSON.parse(fs.readFileSync(wasmPath.replace(/\.wasm$/, ".tests.json"), "utf8"));
     const filter = rest[0];
@@ -330,29 +683,58 @@ async function nodeMain() {
     const selected = tests.filter(([name]) => !filter || name.includes(filter));
     fs.writeSync(1, `running ${selected.length} test${selected.length === 1 ? "" : "s"}\n`);
     for (const [name, exp] of selected) {
-      const instance = await instantiate();
+      const { api } = await nodeInstantiate(mod, env);
       try {
-        instance.exports[exp]();
+        await api.call(exp);
         passed++;
         fs.writeSync(1, `test "${name}" ... ok\n`);
       } catch (e) {
-        const m = panicMessage(e);
-        if (m === null && !(e && e.puddiExit !== undefined)) throw e;
+        const r = report(e);
         failed++;
-        fs.writeSync(1, `test "${name}" ... FAILED\n    panic: ${m ?? "exit"}\n`);
+        fs.writeSync(1, `test "${name}" ... FAILED\n    panic: ${r.msg ?? "exit"}\n`);
       }
     }
     fs.writeSync(1, `\n${failed === 0 ? "ok" : "FAILED"}: ${passed} passed, ${failed} failed\n`);
-    process.exitCode = failed === 0 ? 0 : 1;
+    process.exit(failed === 0 ? 0 : 1);
   } else {
     fs.writeSync(2, "usage: node puddi.mjs run|test app.wasm [args...]\n");
-    process.exitCode = 2;
+    process.exit(2);
   }
 }
 
-if (typeof process !== "undefined" && process.versions && process.versions.node && process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop())) {
-  nodeMain().catch((e) => {
-    console.error(e);
-    process.exit(70);
+async function nodeWorkerMain(wt) {
+  const fs = await import("node:fs");
+  const process = globalThis.process;
+  const { module, entry, wasmPath, rest } = wt.workerData;
+  const ch = channel();
+  wt.parentPort.on("message", (m) => {
+    if (m && m.msg !== undefined) ch.push(m.msg);
   });
+  const ctx = { port: { ch, post: (m) => wt.parentPort.postMessage(m) } };
+  const env = await nodeEnv(fs, process, wasmPath, rest, ctx);
+  env.fatal = (e) => {
+    const x = exitCodeOf(e);
+    const m = panicMessage(e);
+    if (x === null) fs.writeSync(2, m !== null ? `panic: ${m}\n` : `${e && e.stack ? e.stack : e}\n`);
+    wt.parentPort.postMessage({ fatal: x !== null ? x : m !== null ? 101 : 70 });
+  };
+  const { api } = await nodeInstantiate(module, env);
+  try {
+    await api.call("__worker_entry", entry);
+  } catch (e) {
+    env.fatal(e);
+  }
+  wt.parentPort.close();
+}
+
+if (typeof process !== "undefined" && process.versions && process.versions.node) {
+  const wt = await import("node:worker_threads");
+  if (!wt.isMainThread && wt.workerData && wt.workerData.puddiWorker) {
+    nodeWorkerMain(wt);
+  } else if (wt.isMainThread && process.argv[1] && import.meta.url.endsWith(process.argv[1].split(/[\\/]/).pop())) {
+    nodeMain().catch((e) => {
+      console.error(e);
+      process.exit(70);
+    });
+  }
 }

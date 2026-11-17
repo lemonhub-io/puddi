@@ -135,7 +135,34 @@ impl Parser {
         if self.at(&Tok::Colon) {
             // WIT import: collect raw text until end of line
             let mut text = first.name.clone();
+            let mut names = None;
+            let mut alias = None;
             while !self.at(&Tok::Newline) && !self.at(&Tok::Eof) && !self.at(&Tok::Semi) {
+                if self.at(&Tok::As) {
+                    self.bump();
+                    alias = Some(self.ident()?);
+                    break;
+                }
+                if self.at(&Tok::Dot) && matches!(self.peek_at(1), Tok::LBrace) {
+                    self.bump();
+                    self.bump();
+                    let mut ns = Vec::new();
+                    loop {
+                        self.skip_nl();
+                        if self.eat(&Tok::RBrace) {
+                            break;
+                        }
+                        ns.push(self.ident()?);
+                        self.skip_nl();
+                        if !self.eat(&Tok::Comma) {
+                            self.skip_nl();
+                            self.expect(&Tok::RBrace, "`}`")?;
+                            break;
+                        }
+                    }
+                    names = Some(ns);
+                    break;
+                }
                 let t = self.bump();
                 match t.tok {
                     Tok::Ident(s) => text.push_str(&s),
@@ -144,7 +171,7 @@ impl Parser {
                     ref other => text.push_str(crate::lexer::tok_text(other)),
                 }
             }
-            return Ok(Import { path: vec![first], names: None, alias: None, wit: Some(text), span: lo.to(self.prev_span()) });
+            return Ok(Import { path: vec![first], names, alias, wit: Some(text), span: lo.to(self.prev_span()) });
         }
         let mut path = vec![first];
         let mut names = None;
@@ -857,7 +884,7 @@ impl Parser {
                 Tok::LBrace if !self.no_struct && Self::is_path_expr(&e) => {
                     let mut path = Vec::new();
                     Self::path_of(&e, &mut path);
-                    let last_upper = path.last().map(|i| i.name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)).unwrap_or(false);
+                    let last_upper = path.last().map(|i| type_like(&i.name)).unwrap_or(false);
                     if !last_upper {
                         break;
                     }
@@ -1314,7 +1341,7 @@ impl Parser {
                     }
                     return Ok(mk(PatKind::TupleStruct(path, pats), self));
                 }
-                if self.at(&Tok::LBrace) && path.last().map(|i| i.name.starts_with(|c: char| c.is_uppercase())).unwrap_or(false) {
+                if self.at(&Tok::LBrace) && path.last().map(|i| type_like(&i.name)).unwrap_or(false) {
                     self.bump();
                     let mut fields = Vec::new();
                     let mut rest = false;
@@ -1359,4 +1386,9 @@ pub fn plain_string(parts: &[StrPart]) -> Option<String> {
         }
     }
     Some(s)
+}
+
+/// Type names start with an uppercase letter, after any leading underscores.
+pub fn type_like(name: &str) -> bool {
+    name.trim_start_matches('_').chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
 }

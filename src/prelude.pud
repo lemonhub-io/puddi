@@ -145,7 +145,52 @@ pub trait Error: Show {
     fn source(self) -> Option<dyn Error> { None }
 }
 
-pub trait Transfer {}
+/// Values that can be sent between workers; messages are deep-copied.
+pub trait Transfer {
+    fn __enc(self, b: StrBuilder)
+    fn __dec(r: __Reader) -> Self
+}
+
+/// Reads the message encoding used by `Transfer`.
+pub struct __Reader {
+    s: Str
+    var pos: Int
+}
+
+impl __Reader {
+    pub fn i64(self) -> I64 {
+        let start = self.pos
+        while __str_byte(self.s, self.pos) != 59 { self.pos += 1 }
+        let t = __str_slice(self.s, start, self.pos)
+        self.pos += 1
+        t.parse_i64().expect("malformed worker message")
+    }
+    pub fn int(self) -> Int { __cast<I64, Int>(self.i64()) }
+    pub fn str(self) -> Str {
+        let n = self.int()
+        let v = __str_slice(self.s, self.pos, self.pos + n)
+        self.pos += n
+        v
+    }
+}
+
+pub fn __enc_int(b: StrBuilder, v: I64) {
+    b.push(v.show())
+    b.push_byte(59)
+}
+
+pub fn __tdec<T: Transfer>(r: __Reader) -> T { T.__dec(r) }
+
+pub fn __transfer_encode<T: Transfer>(v: T) -> Str {
+    let b = StrBuilder.new()
+    v.__enc(b)
+    b.to_str()
+}
+
+pub fn __transfer_decode<T: Transfer>(s: Str) -> T {
+    let r = __Reader { s, pos: 0 }
+    T.__dec(r)
+}
 
 pub trait Add {
     fn add(self, other: Self) -> Self
@@ -1657,7 +1702,18 @@ impl<T: Hash> Hash for List<T> {
     }
 }
 
-impl<T: Transfer> Transfer for List<T> {}
+impl<T: Transfer> Transfer for List<T> {
+    fn __enc(self, b: StrBuilder) {
+        __enc_int(b, __cast<Int, I64>(self.len()))
+        for x in self { x.__enc(b) }
+    }
+    fn __dec(r: __Reader) -> List<T> {
+        let n = r.int()
+        let out: List<T> = List.with_capacity(n)
+        for _ in 0..n { out.push(T.__dec(r)) }
+        out
+    }
+}
 
 /// A read-only view of a list.
 pub struct ListView<T> {
@@ -2095,18 +2151,181 @@ impl Error for AnyErr {
     fn source(self) -> Option<dyn Error> { self.inner.source() }
 }
 
-impl Transfer for Bool {}
-impl Transfer for Char {}
-impl Transfer for Str {}
-impl Transfer for () {}
-impl<T: Transfer> Transfer for Option<T> {}
-impl<T: Transfer, E: Transfer> Transfer for Result<T, E> {}
-impl<K: Transfer, V: Transfer> Transfer for Map<K, V> {}
-impl<T: Transfer> Transfer for Set<T> {}
-impl<A: Transfer, B: Transfer> Transfer for (A, B) {}
-impl<A: Transfer, B: Transfer, C: Transfer> Transfer for (A, B, C) {}
+impl Transfer for Bool {
+    fn __enc(self, b: StrBuilder) { b.push_byte(if self { 49 } else { 48 }) }
+    fn __dec(r: __Reader) -> Bool {
+        r.pos += 1
+        __str_byte(r.s, r.pos - 1) == 49
+    }
+}
+
+impl Transfer for Char {
+    fn __enc(self, b: StrBuilder) { __enc_int(b, __cast<U32, I64>(self.to_u32())) }
+    fn __dec(r: __Reader) -> Char { Char.from_u32(__cast<I64, U32>(r.i64())).expect("malformed worker message") }
+}
+
+impl Transfer for Str {
+    fn __enc(self, b: StrBuilder) {
+        __enc_int(b, __cast<Int, I64>(__str_len(self)))
+        b.push(self)
+    }
+    fn __dec(r: __Reader) -> Str { r.str() }
+}
+
+impl Transfer for () {
+    fn __enc(self, b: StrBuilder) {}
+    fn __dec(r: __Reader) -> () { () }
+}
+
+impl<T: Transfer> Transfer for Option<T> {
+    fn __enc(self, b: StrBuilder) {
+        match self {
+            Some(v) -> {
+                b.push_byte(49)
+                v.__enc(b)
+            }
+            None -> b.push_byte(48)
+        }
+    }
+    fn __dec(r: __Reader) -> Option<T> {
+        r.pos += 1
+        if __str_byte(r.s, r.pos - 1) == 49 { Some(T.__dec(r)) } else { None }
+    }
+}
+
+impl<T: Transfer, E: Transfer> Transfer for Result<T, E> {
+    fn __enc(self, b: StrBuilder) {
+        match self {
+            Ok(v) -> {
+                b.push_byte(48)
+                v.__enc(b)
+            }
+            Err(e) -> {
+                b.push_byte(49)
+                e.__enc(b)
+            }
+        }
+    }
+    fn __dec(r: __Reader) -> Result<T, E> {
+        r.pos += 1
+        if __str_byte(r.s, r.pos - 1) == 48 { Ok(T.__dec(r)) } else { Err(E.__dec(r)) }
+    }
+}
+
+impl<K: Transfer, V: Transfer> Transfer for Map<K, V> {
+    fn __enc(self, b: StrBuilder) {
+        __enc_int(b, __cast<Int, I64>(self.len()))
+        for (k, v) in self {
+            k.__enc(b)
+            v.__enc(b)
+        }
+    }
+    fn __dec(r: __Reader) -> Map<K, V> {
+        let n = r.int()
+        let m: Map<K, V> = Map.new()
+        for _ in 0..n {
+            let k = K.__dec(r)
+            m.insert(k, V.__dec(r))
+        }
+        m
+    }
+}
+
+impl<T: Transfer> Transfer for Set<T> {
+    fn __enc(self, b: StrBuilder) {
+        __enc_int(b, __cast<Int, I64>(self.len()))
+        for x in self { x.__enc(b) }
+    }
+    fn __dec(r: __Reader) -> Set<T> {
+        let n = r.int()
+        let out: Set<T> = Set.new()
+        for _ in 0..n { out.insert(T.__dec(r)) }
+        out
+    }
+}
+
+impl<A: Transfer, B: Transfer> Transfer for (A, B) {
+    fn __enc(self, b: StrBuilder) {
+        self.0.__enc(b)
+        self.1.__enc(b)
+    }
+    fn __dec(r: __Reader) -> (A, B) {
+        let a = A.__dec(r)
+        (a, B.__dec(r))
+    }
+}
+
+impl<A: Transfer, B: Transfer, C: Transfer> Transfer for (A, B, C) {
+    fn __enc(self, b: StrBuilder) {
+        self.0.__enc(b)
+        self.1.__enc(b)
+        self.2.__enc(b)
+    }
+    fn __dec(r: __Reader) -> (A, B, C) {
+        let a = A.__dec(r)
+        let b = B.__dec(r)
+        (a, b, C.__dec(r))
+    }
+}
 
 // ---------------------------------------------------------------- async
+
+@intrinsic("host_async") fn __host_async(op: Int, arg: Str) -> Str
+
+// ---- linear memory access for the canonical ABI (component targets)
+@intrinsic("mem_load") fn __mem_load<T>(addr: I32) -> T
+@intrinsic("mem_store") fn __mem_store<T>(addr: I32, v: T)
+@intrinsic("cabi_alloc") fn __cabi_alloc(size: I32, align: I32) -> I32
+@intrinsic("cabi_mark") fn __cabi_mark() -> I32
+@intrinsic("cabi_reset") fn __cabi_reset(mark: I32)
+@intrinsic("cabi_base") fn __cabi_base() -> I32
+@intrinsic("str_to_mem") fn __str_to_mem(s: Str) -> I32
+@intrinsic("str_from_mem") fn __str_from_mem(ptr: I32, len: I32) -> Str
+
+/// A `stream<T>` handle from a WIT interface.
+@derive(Eq, Show)
+pub struct __WitStream {
+    pub handle: I32
+}
+
+/// A `future<T>` handle from a WIT interface.
+@derive(Eq, Show)
+pub struct __WitFuture {
+    pub handle: I32
+}
+@intrinsic("global") fn __global<T>(init: T) -> T
+@intrinsic("is_err") fn __is_err<T>(v: T) -> Bool
+
+/// Instance-wide runtime state.
+struct __Rt {
+    runners: List<fn()>
+    callbacks: List<fn(Int)>
+}
+
+fn __rt() -> __Rt { __global(__Rt { runners: [], callbacks: [] }) }
+
+@export("__run_task")
+fn __run_task(id: Int) {
+    let r = __rt()
+    let f = r.runners[id]
+    r.runners[id] = || {}
+    f()
+}
+
+/// Registers a function the host can call back with an integer argument.
+pub fn __register_callback(f: fn(Int)) -> Int {
+    let r = __rt()
+    r.callbacks.push(f)
+    r.callbacks.len() - 1
+}
+
+@export("__callback")
+fn __callback(id: Int, arg: Int) {
+    let f = __rt().callbacks[id]
+    f(arg)
+}
+
+fn __cancel_point() { __host(43, "") }
 
 /// A lazy asynchronous computation; `.await` runs it to completion.
 pub struct Future<T> {
@@ -2122,6 +2341,7 @@ impl<T> Future<T> {
     /// A future that is already complete.
     pub fn ready(v: T) -> Future<T> { Future { run: None, value: Some(v) } }
     pub fn __await(self) -> T {
+        __cancel_point()
         match self.value {
             Some(v) -> return v
             None -> {}
@@ -2134,43 +2354,114 @@ impl<T> Future<T> {
     }
 }
 
-/// A child task started in a scope with `s.spawn(...)`.
+/// A child task started in a scope with `s.spawn(...)`. It runs concurrently
+/// with its parent; `.await` waits for its result.
 pub struct Task<T> {
     fut: Future<T>
+    var id: Int
+    var done: Bool
 }
 
 impl<T> Task<T> {
-    pub fn __await(self) -> T { self.fut.__await() }
+    pub fn __await(self) -> T {
+        __cancel_point()
+        if !self.done {
+            __host_async(102, "{self.id}")
+            __cancel_point()
+        }
+        match self.fut.value {
+            Some(v) -> v
+            None -> panic("awaited a task that was cancelled")
+        }
+    }
+    /// Whether the task has finished.
+    pub fn is_done(self) -> Bool { self.done }
 }
 
 /// A structured-concurrency scope; children cannot outlive it.
 pub struct Scope {
-    tasks: List<fn()>
+    children: List<Int>
+    workers: List<Int>
+    var ended: Bool
 }
 
 impl Scope {
+    /// Starts a child task that runs concurrently until the scope ends.
     pub fn spawn<T>(self, f: Future<T>) -> Task<T> {
-        self.tasks.push(|| f.__await())
-        Task { fut: f }
+        if self.ended { panic("spawn on a task scope that has already ended") }
+        let t = Task { fut: f, id: 0, done: false }
+        let r = __rt()
+        r.runners.push(|| {
+            t.fut.__await()
+            t.done = true
+        })
+        let rid = r.runners.len() - 1
+        t.id = __host(40, "{rid}").parse_int().unwrap()
+        self.children.push(t.id)
+        t
     }
-    fn finish(self) {
-        for t in self.tasks { t() }
+    pub fn __start_worker<In: Transfer, Out: Transfer>(self, entry: Int) -> __Worker<In, Out> {
+        if self.ended { panic("worker started on a task scope that has already ended") }
+        let id = __host(50, "{entry}").parse_int().unwrap()
+        self.workers.push(id)
+        __Worker { id }
+    }
+    fn finish(self, failed: Bool) {
+        if failed {
+            for c in self.children { __host(41, "{c}") }
+        }
+        for c in self.children { __host_async(102, "{c}") }
+        for w in self.workers { __host(52, "{w}") }
+        self.ended = true
     }
 }
 
 pub struct TaskApi {}
 
 impl TaskApi {
-    /// Runs `body` with a new scope and completes when all children have completed.
+    /// Runs `body` with a new scope. The scope completes when all children
+    /// have completed; if `body` returns an `Err`, unfinished children are cancelled.
     pub fn scope<T>(self, body: fn(Scope) -> Future<T>) -> Future<T> {
         __future_new(|| {
-            let s = Scope { tasks: [] }
+            let s = Scope { children: [], workers: [], ended: false }
             let r = body(s).__await()
-            s.finish()
+            s.finish(__is_err(r))
             r
         })
     }
-    pub fn is_cancelled(self) -> Bool { false }
+    /// Whether the current task has been cancelled.
+    pub fn is_cancelled(self) -> Bool { __host(42, "") == "1" }
 }
 
 pub const task: TaskApi = TaskApi {}
+
+/// The worker side of a worker's channel: receives `In`, sends `Out`.
+pub struct __Port<In, Out> {}
+
+impl<In: Transfer, Out: Transfer> __Port<In, Out> {
+    /// Waits for the next message; `None` once the owner has closed the channel.
+    pub async fn recv(self) -> Option<In> {
+        let m = __host_async(104, "")
+        if m == "" { None } else { Some(__transfer_decode(__str_slice(m, 1, __str_len(m)))) }
+    }
+    pub fn send(self, v: Out) { __host(53, __transfer_encode(v)) }
+}
+
+/// The owner side of a worker's channel: sends `In`, receives `Out`.
+pub struct __Worker<In, Out> {
+    id: Int
+}
+
+impl<In: Transfer, Out: Transfer> __Worker<In, Out> {
+    pub fn send(self, v: In) { __host(51, "{self.id}\0{__transfer_encode(v)}") }
+    /// Waits for the next message; `None` once the worker function has returned.
+    pub async fn recv(self) -> Option<Out> {
+        let m = __host_async(103, "{self.id}")
+        if m == "" { None } else { Some(__transfer_decode(__str_slice(m, 1, __str_len(m)))) }
+    }
+}
+
+pub fn __worker_main<In: Transfer, Out: Transfer>(f: fn(__Port<In, Out>) -> Future<()>) {
+    f(__Port {}).__await()
+    __host(54, "")
+}

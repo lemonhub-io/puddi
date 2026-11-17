@@ -1,0 +1,3 @@
+import wasi:nope/thing
+
+fn main() {}

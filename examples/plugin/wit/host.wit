@@ -1,0 +1,13 @@
+package demo:host;
+
+interface log {
+  enum level { info, warn }
+  record entry { level: level, message: string, tags: list<string> }
+  write: func(e: entry);
+}
+
+world plugin {
+  import log;
+  export greet: func(name: string, times: u32) -> list<string>;
+  export classify: func(n: s64) -> result<string, option<u8>>;
+}

@@ -84,6 +84,12 @@ fn struct_body(tr: &str, name: &str, ty: &str, fields: &[ast::Field]) -> String 
             let parts: Vec<String> = fs.iter().map(|f| format!("{f}: {{self.{f}.show_nested()}}")).collect();
             format!("    fn show(self) -> Str {{ \"{name} \\{{ {} \\}}\" }}\n", parts.join(", "))
         }
+        "Transfer" => {
+            let enc: String = fs.iter().map(|f| format!("        self.{f}.__enc(b)\n")).collect();
+            let dec: Vec<String> = fs.iter().map(|f| format!("{f}: __tdec(r)")).collect();
+            let lit = if fs.is_empty() { format!("{name} {{}}") } else { format!("{name} {{ {} }}", dec.join(", ")) };
+            format!("    fn __enc(self, b: StrBuilder) {{\n{enc}    }}\n    fn __dec(r: __Reader) -> {ty} {{ {lit} }}\n")
+        }
         _ => String::new(),
     }
 }
@@ -183,6 +189,31 @@ fn enum_body(tr: &str, name: &str, ty: &str, vs: &[ast::Variant], gnames: &[&str
                 let _ = writeln!(s, "            {p} -> {text}");
             }
             s.push_str("        }\n    }\n");
+            s
+        }
+        "Transfer" => {
+            let mut s = "    fn __enc(self, b: StrBuilder) {\n        match self {\n".to_string();
+            for (i, v) in vs.iter().enumerate() {
+                let (p, bs) = variant_pat(name, v, "a");
+                let mut body = format!("{{\n                __enc_int(b, {i})\n");
+                for x in &bs {
+                    let _ = writeln!(body, "                {x}.__enc(b)");
+                }
+                body.push_str("            }");
+                let _ = writeln!(s, "            {p} -> {body}");
+            }
+            s.push_str("        }\n    }\n");
+            let _ = write!(s, "    fn __dec(r: __Reader) -> {ty} {{\n        let t = r.int()\n");
+            for (i, v) in vs.iter().enumerate() {
+                let vn = &v.name.name;
+                let e = match &v.kind {
+                    VariantKind::Unit => format!("{name}.{vn}"),
+                    VariantKind::Tuple(ts) => format!("{name}.{vn}({})", vec!["__tdec(r)"; ts.len()].join(", ")),
+                    VariantKind::Record(fs) => format!("{name}.{vn} {{ {} }}", fs.iter().map(|f| format!("{}: __tdec(r)", f.name.name)).collect::<Vec<_>>().join(", ")),
+                };
+                let _ = writeln!(s, "        if t == {i} {{ return {e} }}");
+            }
+            s.push_str("        panic(\"malformed worker message\")\n    }\n");
             s
         }
         _ => String::new(),

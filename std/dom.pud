@@ -1,0 +1,76 @@
+// std.dom: the browser document.
+
+/// An element of the document.
+pub struct Element {
+    id: Int
+}
+
+/// An event delivered to a handler registered with `Element.on`.
+pub struct Event {
+    id: Int
+}
+
+fn el(r: Str) -> Option<Element> {
+    if r == "" { None } else { Some(Element { id: r.parse_int().unwrap() }) }
+}
+
+/// The first element matching a CSS selector.
+pub fn query(selector: Str) -> Option<Element> { el(__host(60, selector)) }
+
+/// All elements matching a CSS selector.
+pub fn query_all(selector: Str) -> List<Element> {
+    let r = __host(78, selector)
+    if r == "" { return [] }
+    r.split(",").map(|s| Element { id: s.parse_int().unwrap() }).to_list()
+}
+
+/// Creates a detached element with the given tag name.
+pub fn create(tag: Str) -> Element { el(__host(61, tag)).unwrap() }
+
+/// The document body.
+pub fn body() -> Element { el(__host(74, "")).unwrap() }
+
+/// Sets the document title.
+pub fn set_title(title: Str) { __host(76, title) }
+
+impl Element {
+    pub fn text(self) -> Str { __host(62, "{self.id}") }
+    pub fn set_text(self, text: Str) { __host(63, "{self.id}\0{text}") }
+    pub fn set_html(self, html: Str) { __host(72, "{self.id}\0{html}") }
+    pub fn attr(self, name: Str) -> Option<Str> {
+        let r = __host(64, "{self.id}\0{name}")
+        if __host_ok() { Some(r) } else { None }
+    }
+    pub fn set_attr(self, name: Str, value: Str) { __host(65, "{self.id}\0{name}\0{value}") }
+    pub fn append(self, child: Element) { __host(66, "{self.id}\0{child.id}") }
+    pub fn remove(self) { __host(67, "{self.id}") }
+    /// The value of an input, select or textarea element.
+    pub fn value(self) -> Str { __host(68, "{self.id}") }
+    pub fn set_value(self, value: Str) { __host(69, "{self.id}\0{value}") }
+    pub fn add_class(self, name: Str) { __host(70, "{self.id}\0{name}") }
+    pub fn remove_class(self, name: Str) { __host(71, "{self.id}\0{name}") }
+    pub fn toggle_class(self, name: Str) { __host(77, "{self.id}\0{name}") }
+    pub fn set_style(self, property: Str, value: Str) { __host(75, "{self.id}\0{property}\0{value}") }
+    /// The first descendant matching a CSS selector.
+    pub fn query(self, selector: Str) -> Option<Element> { el(__host(79, "{self.id}\0{selector}")) }
+    /// Calls `f` each time the event happens on this element.
+    pub fn on(self, event: Str, f: fn(Event)) {
+        let cb = __register_callback(|e| f(Event { id: e }))
+        __host(73, "{self.id}\0{event}\0{cb}")
+    }
+}
+
+impl Eq for Element {
+    fn eq(self, other: Element) -> Bool { self.id == other.id }
+}
+
+impl Event {
+    /// The event type, such as `click`.
+    pub fn kind(self) -> Str { __host(80, "{self.id}\0type") }
+    pub fn target(self) -> Element { el(__host(81, "{self.id}")).unwrap() }
+    /// The pressed key for keyboard events, or "".
+    pub fn key(self) -> Str { __host(80, "{self.id}\0key") }
+    /// The target's value for input events, or "".
+    pub fn value(self) -> Str { __host(80, "{self.id}\0value") }
+    pub fn prevent_default(self) { __host(82, "{self.id}") }
+}

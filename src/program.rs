@@ -13,6 +13,15 @@ pub enum Pkg {
     Prelude,
     Std,
     User,
+    /// A dependency package.
+    Dep(u16),
+}
+
+impl Pkg {
+    /// Packages compiled from user-written source (the root package and its dependencies).
+    pub fn is_source(self) -> bool {
+        matches!(self, Pkg::User | Pkg::Dep(_))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -201,6 +210,10 @@ pub struct ModSource {
     pub path: String,
     pub pkg: Pkg,
     pub ast: ast::Module,
+    /// Module path prefix of the package ("" for the root package).
+    pub prefix: String,
+    /// Dependency import names of the package -> their module path prefixes.
+    pub aliases: HashMap<String, String>,
 }
 
 /// Context for resolving type expressions.
@@ -220,6 +233,9 @@ const STD_AVAIL: &[(&str, &[&str])] = &[
     ("std.fs", &["wasi"]),
     ("std.env", &["wasi"]),
     ("std.json", &["browser", "wasi", "plugin"]),
+    ("std.http", &["browser", "wasi"]),
+    ("std.worker", &["browser"]),
+    ("std.dom", &["browser"]),
 ];
 
 pub fn std_available(path: &str, target: &str) -> Option<bool> {
@@ -307,12 +323,12 @@ impl Program {
         let m = &self.modules[module];
         match m.items.get(name) {
             Some((d, is_pub)) => {
-                if !*is_pub && module != from && m.pkg == Pkg::User {
+                if !*is_pub && module != from && m.pkg.is_source() {
                     return Err(Diag::new(span, format!("`{name}` is private to module `{}`", m.path)).note("mark it `pub` to use it from other modules"));
                 }
                 Ok(d.clone())
             }
-            None => Err(Diag::new(span, format!("module `{}` has no item named `{name}`", m.path))),
+            None => Err(Diag::new(span, format!("module `{}` has no item named `{name}`", m.path.strip_suffix(".lib").unwrap_or(&m.path)))),
         }
     }
 
@@ -858,13 +874,24 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
     // 3. imports
     for (mid, s) in sources.iter().enumerate() {
         for imp in &s.ast.imports {
-            if let Some(w) = &imp.wit {
-                errs.push(Diag::new(imp.span, format!("WIT import `{w}` is not supported: this compiler emits core WebAssembly modules, not components")));
-                continue;
-            }
-            let path: Vec<&str> = imp.path.iter().map(|i| i.name.as_str()).collect();
+            let wit_path;
+            let path: Vec<&str> = if let Some(w) = &imp.wit {
+                let Some(mp) = crate::wit::module_path_for_name(w) else {
+                    errs.push(Diag::new(imp.span, format!("invalid WIT import `{w}`; expected `namespace:package/interface`")));
+                    continue;
+                };
+                if !p.modules.iter().any(|m| m.path == mp) {
+                    let note = if target == "browser" { "WIT interfaces are imported on the `wasi` and `plugin` targets, which build components" } else { "the interface must be part of the bundled WASI 0.3 packages or of the package's wit/ directory" };
+                    errs.push(Diag::new(imp.span, format!("cannot find WIT interface `{w}`")).note(note));
+                    continue;
+                }
+                wit_path = mp;
+                wit_path.split('.').collect()
+            } else {
+                imp.path.iter().map(|i| i.name.as_str()).collect()
+            };
             let full = path.join(".");
-            if full.starts_with("std.") || full == "std" {
+            if (full.starts_with("std.") || full == "std") && !full.starts_with("std.__") {
                 match std_available(&full, target) {
                     None => {
                         errs.push(Diag::new(imp.span, format!("standard library module `{full}` is not available in this implementation")));
@@ -877,9 +904,28 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
                     Some(true) => {}
                 }
             }
-            let target_mod = p.modules.iter().position(|m| m.path == full && (m.pkg == Pkg::User || m.pkg == Pkg::Std));
+            let own = if s.prefix.is_empty() { full.clone() } else { format!("{}.{full}", s.prefix) };
+            let mut target_mod = p.modules.iter().position(|m| m.path == own && m.pkg == s.pkg);
+            if target_mod.is_none() && full.starts_with("std") {
+                target_mod = p.modules.iter().position(|m| m.path == full && m.pkg == Pkg::Std);
+            }
+            if target_mod.is_none() {
+                if let Some(pre) = s.aliases.get(path[0]) {
+                    let mut dep_path = pre.clone();
+                    let rest = &path[1..];
+                    if rest.is_empty() {
+                        dep_path.push_str(".lib");
+                    }
+                    for r in rest {
+                        dep_path.push('.');
+                        dep_path.push_str(r);
+                    }
+                    target_mod = p.modules.iter().position(|m| m.path == dep_path && matches!(m.pkg, Pkg::Dep(_)));
+                }
+            }
             let Some(tm) = target_mod else {
-                errs.push(Diag::new(imp.span, format!("cannot find module `{full}`")).note("dependencies from pud.toml are not supported by this compiler yet; modules are files under src/"));
+                let note = if s.aliases.is_empty() { "modules are files under src/, and dependencies are listed under [deps] in pud.toml" } else { "modules are files under src/; dependencies are imported by their name in [deps]" };
+                errs.push(Diag::new(imp.span, format!("cannot find module `{full}`")).note(note));
                 continue;
             };
             if let Some(names) = &imp.names {
@@ -894,29 +940,6 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
             } else {
                 let bind = imp.alias.as_ref().map(|a| a.name.clone()).unwrap_or_else(|| path.last().unwrap().to_string());
                 p.modules[mid].imports.insert(bind, (Def::Module(tm), imp.span));
-            }
-        }
-    }
-
-    // 4. aliases (resolve in order; aliases referring to later aliases resolve iteratively)
-    for _round in 0..4 {
-        for i in 0..p.aliases.len() {
-            if p.aliases[i].resolved.is_some() {
-                continue;
-            }
-            let gens = p.aliases[i].generics.clone();
-            let cx = TyCx { module: p.aliases[i].module, generics: &gens, self_ty: None };
-            if let Ok(t) = p.resolve_ty(&cx, &p.aliases[i].ty.clone()) {
-                p.aliases[i].resolved = Some(t);
-            }
-        }
-    }
-    for i in 0..p.aliases.len() {
-        if p.aliases[i].resolved.is_none() {
-            let gens = p.aliases[i].generics.clone();
-            let cx = TyCx { module: p.aliases[i].module, generics: &gens, self_ty: None };
-            if let Err(e) = p.resolve_ty(&cx, &p.aliases[i].ty.clone()) {
-                errs.push(e);
             }
         }
     }
@@ -943,6 +966,29 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
         }
         p.adts[*id].generics = gdefs;
     }
+    // 4. aliases (resolve in order; aliases referring to later aliases resolve iteratively)
+    for _round in 0..4 {
+        for i in 0..p.aliases.len() {
+            if p.aliases[i].resolved.is_some() {
+                continue;
+            }
+            let gens = p.aliases[i].generics.clone();
+            let cx = TyCx { module: p.aliases[i].module, generics: &gens, self_ty: None };
+            if let Ok(t) = p.resolve_ty(&cx, &p.aliases[i].ty.clone()) {
+                p.aliases[i].resolved = Some(t);
+            }
+        }
+    }
+    for i in 0..p.aliases.len() {
+        if p.aliases[i].resolved.is_none() {
+            let gens = p.aliases[i].generics.clone();
+            let cx = TyCx { module: p.aliases[i].module, generics: &gens, self_ty: None };
+            if let Err(e) = p.resolve_ty(&cx, &p.aliases[i].ty.clone()) {
+                errs.push(e);
+            }
+        }
+    }
+
     for (id, item) in &adt_items {
         let names: Vec<String> = p.adts[*id].generics.iter().map(|g| g.name.clone()).collect();
         let self_ty = Ty::Adt(*id, (0..names.len() as u32).map(Ty::Param).collect());
@@ -1114,18 +1160,18 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
             None => None,
         };
         // orphan rule
-        if pi.pkg == Pkg::User {
+        if pi.pkg.is_source() {
             match &trait_ref {
                 Some(tr) => {
-                    let trait_local = p.traits[tr.trait_id].pkg == Pkg::User;
-                    let type_local = matches!(&self_ty, Ty::Adt(id, _) if p.adts[*id].pkg == Pkg::User);
+                    let trait_local = p.traits[tr.trait_id].pkg == pi.pkg;
+                    let type_local = matches!(&self_ty, Ty::Adt(id, _) if p.adts[*id].pkg == pi.pkg);
                     if !trait_local && !type_local {
                         errs.push(Diag::new(pi.span, format!("cannot implement `{}` for `{}`: either the trait or the type must be defined in this package", p.trait_ref_str(tr), p.ty_str_p(&self_ty, &names))));
                         continue;
                     }
                 }
                 None => {
-                    let type_local = matches!(&self_ty, Ty::Adt(id, _) if p.adts[*id].pkg == Pkg::User);
+                    let type_local = matches!(&self_ty, Ty::Adt(id, _) if p.adts[*id].pkg == pi.pkg);
                     if !type_local {
                         errs.push(Diag::new(pi.span, format!("inherent impls are only allowed for types defined in this package, not `{}`", p.ty_str_p(&self_ty, &names))));
                         continue;

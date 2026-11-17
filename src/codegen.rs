@@ -15,6 +15,8 @@ pub struct Output {
 }
 
 struct Cg<'a> {
+    tail: String,
+    component: bool,
     prog: &'a Program,
     g: &'a Global<'a>,
     types: Vec<String>,
@@ -27,6 +29,7 @@ struct Cg<'a> {
     imports: Vec<String>,
     globals: Vec<String>,
     exports: Vec<String>,
+    global_names: HashSet<String>,
     shims: HashMap<FnInst, String>,
     vtable_globals: HashMap<(Ty, TraitRef), String>,
     func_names: Vec<String>,
@@ -393,8 +396,15 @@ impl<'a> Cg<'a> {
         out.push_str(")\n");
         self.funcs.push(out);
         if let Some(e) = &f.export {
-            self.gen_export_wrapper(&name, f, e);
+            // components export only the canonical ABI wrappers generated from the world
+            if !self.component || f.name.starts_with("__wit_") {
+                self.gen_export_wrapper(&name, f, e);
+            }
         }
+    }
+
+    fn funcs_tail(&mut self) -> &mut String {
+        &mut self.tail
     }
 
     fn raw_vt(&mut self, t: &Ty) -> Option<String> {
@@ -1318,6 +1328,89 @@ impl<'a> Cg<'a> {
                 st.emit("call $rt_host");
             }
             "host_ok" => st.emit("call $host_ok"),
+            "mem_load" => {
+                self.gen_expr(st, &args[0]);
+                let ins = match &targs[0] {
+                    Ty::Int(IntTy::I8) => "i32.load8_s",
+                    Ty::Int(IntTy::U8) | Ty::Bool => "i32.load8_u",
+                    Ty::Int(IntTy::I16) => "i32.load16_s",
+                    Ty::Int(IntTy::U16) => "i32.load16_u",
+                    Ty::Int(it) if it.is64() => "i64.load",
+                    Ty::Float(FloatTy::F64) => "f64.load",
+                    Ty::Float(FloatTy::F32) => "f32.load",
+                    _ => "i32.load",
+                };
+                st.emit(ins);
+            }
+            "mem_store" => {
+                self.gen_expr(st, &args[0]);
+                self.gen_expr(st, &args[1]);
+                let ins = match &targs[0] {
+                    Ty::Int(IntTy::I8 | IntTy::U8) | Ty::Bool => "i32.store8",
+                    Ty::Int(IntTy::I16 | IntTy::U16) => "i32.store16",
+                    Ty::Int(it) if it.is64() => "i64.store",
+                    Ty::Float(FloatTy::F64) => "f64.store",
+                    Ty::Float(FloatTy::F32) => "f32.store",
+                    _ => "i32.store",
+                };
+                st.emit(ins);
+                st.emit("i32.const 0");
+            }
+            "cabi_alloc" => {
+                st.emit("i32.const 0 i32.const 0");
+                self.gen_expr(st, &args[1]);
+                self.gen_expr(st, &args[0]);
+                st.emit("call $cabi_realloc");
+            }
+            "cabi_mark" => st.emit("global.get $cabi_top"),
+            "cabi_base" => st.emit("i32.const 65536"),
+            "cabi_reset" => {
+                self.gen_expr(st, &args[0]);
+                st.emit("global.set $cabi_top i32.const 0");
+            }
+            "str_to_mem" => {
+                let sty = format!("(ref null {})", self.tname(&Ty::Str));
+                let t = self.temp_raw(st, &sty);
+                let p = self.temp_raw(st, "i32");
+                self.gen_expr(st, &args[0]);
+                st.emit(&format!("local.set {t} i32.const 0 i32.const 0 i32.const 1 local.get {t} ref.as_non_null array.len call $cabi_realloc local.set {p}"));
+                st.emit(&format!("local.get {t} ref.as_non_null local.get {p} call $rt_to_mem_at drop local.get {p}"));
+            }
+            "str_from_mem" => {
+                self.gen_expr(st, &args[0]);
+                self.gen_expr(st, &args[1]);
+                st.emit("call $rt_from_mem_at");
+            }
+            "host_async" => {
+                for a in args {
+                    self.gen_expr(st, a);
+                }
+                st.emit("call $rt_host_async");
+            }
+            "global" => {
+                let tn = self.tname(&targs[0]);
+                let g = format!("$glob.{}", sanitize(&self.mangle(&targs[0])));
+                if self.global_names.insert(g.clone()) {
+                    self.globals.push(format!("(global {g} (mut (ref null {tn})) (ref.null {tn}))"));
+                }
+                st.emit(&format!("global.get {g} ref.is_null"));
+                st.emit("(if (then");
+                self.gen_expr(st, &args[0]);
+                st.emit(&format!("global.set {g}))"));
+                st.emit(&format!("global.get {g} ref.as_non_null"));
+            }
+            "is_err" => {
+                let is_result = matches!(&targs[0], Ty::Adt(id, _) if self.prog.adts[*id].name == "Result" && self.prog.adts[*id].pkg == crate::program::Pkg::Prelude);
+                if is_result {
+                    self.gen_expr(st, &args[0]);
+                    let tn = self.tname(&targs[0]);
+                    st.emit(&format!("struct.get {tn} 0 i32.const 1 i32.eq"));
+                } else {
+                    self.gen_expr(st, &args[0]);
+                    st.emit("drop");
+                    st.emit("i32.const 0");
+                }
+            }
             "cast" => {
                 self.gen_expr(st, &args[0]);
                 self.gen_cast(st, &targs[0], &targs[1], true);
@@ -1514,6 +1607,32 @@ impl<'a> Cg<'a> {
   local.get $n call $rt_ensure_mem
   i32.const 0 call $host_take
   local.get $n call $rt_from_mem)
+(func $rt_host_async (param $op i32) (param $s (ref {sn})) (result (ref {sn}))
+  (local $n i32)
+  local.get $op i32.const 0 local.get $s i32.const 0 call $rt_to_mem_at call $host_async call $host_claim local.tee $n
+  i32.const 0 i32.lt_s (if (then i32.const 0 array.new_default {sn} return))
+  local.get $n call $rt_ensure_mem
+  i32.const 0 call $host_take
+  local.get $n call $rt_from_mem)
+(global $cabi_top (mut i32) (i32.const 65536))
+(func $cabi_realloc (param $old i32) (param $old_size i32) (param $align i32) (param $new_size i32) (result i32)
+  (local $p i32)
+  global.get $cabi_top local.get $align i32.const 1 i32.sub i32.add
+  i32.const 0 local.get $align i32.sub i32.and local.set $p
+  local.get $p local.get $new_size i32.add global.set $cabi_top
+  global.get $cabi_top call $rt_ensure_mem
+  local.get $old_size (if (then
+    local.get $p local.get $old local.get $old_size local.get $new_size i32.lt_u (if (result i32) (then local.get $old_size) (else local.get $new_size)) memory.copy))
+  local.get $p)
+(func $rt_from_mem_at (param $p i32) (param $n i32) (result (ref {sn}))
+  (local $r (ref null {sn})) (local $i i32)
+  local.get $n array.new_default {sn} local.set $r
+  (block $done (loop $l
+    local.get $i local.get $n i32.ge_u br_if $done
+    local.get $r ref.as_non_null local.get $i local.get $p local.get $i i32.add i32.load8_u array.set {sn}
+    local.get $i i32.const 1 i32.add local.set $i
+    br $l))
+  local.get $r ref.as_non_null)
 (func $rt_frem64 (param $a f64) (param $b f64) (result f64)
   local.get $a local.get $a local.get $b f64.div f64.trunc local.get $b f64.mul f64.sub)
 (func $rt_frem32 (param $a f32) (param $b f32) (result f32)
@@ -1559,7 +1678,9 @@ fn ovf_body(it: IntTy, o: &str) -> (&'static str, String) {
     }
 }
 
-pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(String, usize)]) -> Result<Output, String> {
+/// `plat`: in component builds, the platform functions (in `driver::PLATFORM_FNS` order)
+/// that implement the host operations inside the module.
+pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(String, usize)], plat: Option<&[usize]>) -> Result<Output, String> {
     let mut cg = Cg {
         prog,
         g,
@@ -1573,10 +1694,13 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         imports: Vec::new(),
         globals: Vec::new(),
         exports: Vec::new(),
+        global_names: HashSet::new(),
         shims: HashMap::new(),
         vtable_globals: HashMap::new(),
         func_names: Vec::new(),
         extern_count: 0,
+        tail: String::new(),
+        component: plat.is_some(),
     };
     // function names
     let mut by_idx: Vec<Option<&FnInst>> = vec![None; g.funcs.len()];
@@ -1600,6 +1724,15 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         let n = cg.func_names[e].clone();
         cg.exports.push(format!("(export \"main\" (func {n}))"));
     }
+    if !g.worker_entries.is_empty() {
+        let mut w = String::from("(func $__worker_entry (export \"__worker_entry\") (param $k i32)\n");
+        for (k, &idx) in g.worker_entries.iter().enumerate() {
+            let n = cg.func_names[idx].clone();
+            let _ = writeln!(w, "  local.get $k i32.const {k} i32.eq (if (then call {n} drop return))");
+        }
+        w.push_str("  unreachable)\n");
+        cg.funcs.push(w);
+    }
     let mut test_exports = Vec::new();
     for (k, (name, idx)) in tests.iter().enumerate() {
         let n = cg.func_names[*idx].clone();
@@ -1608,6 +1741,39 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         test_exports.push((name.clone(), ex));
     }
     let mut out = String::from("(module\n");
+    if let Some(pf) = plat {
+        let n: Vec<String> = pf.iter().map(|&i| cg.func_names[i].clone()).collect();
+        let sn = cg.tname(&Ty::Str);
+        let _ = write!(
+            cg.funcs_tail(),
+            r#"(global $plat_pending (mut (ref null {sn})) (ref.null {sn}))
+(func $host_write (param $fd i32) (param $p i32) (param $n i32)
+  local.get $fd local.get $p local.get $n call $rt_from_mem_at call {w} drop)
+(func $host_panic (param $p i32) (param $n i32)
+  local.get $p local.get $n call $rt_from_mem_at call {pa} drop unreachable)
+(func $host_fmt_f64 (param $x f64) (param $p i32) (param $is32 i32) (result i32)
+  local.get $x local.get $is32 call {fm} local.get $p call $rt_to_mem_at)
+(func $host_parse_f64 (param $p i32) (param $n i32) (result f64)
+  local.get $p local.get $n call $rt_from_mem_at call {pr})
+(func $host_math (param $op i32) (param $x f64) (param $y f64) (result f64)
+  local.get $op local.get $x local.get $y call {ma})
+(func $host_op (param $op i32) (param $p i32) (param $n i32) (result i32)
+  local.get $op local.get $p local.get $n call $rt_from_mem_at call {ho} global.set $plat_pending
+  global.get $plat_pending ref.as_non_null array.len)
+(func $host_take (param $p i32)
+  global.get $plat_pending ref.as_non_null local.get $p call $rt_to_mem_at drop)
+(func $host_ok (result i32) call {ok})
+(func $host_async (param $op i32) (param $p i32) (param $n i32) (result i32)
+  local.get $op local.get $p local.get $n call $rt_from_mem_at call {ha} global.set $plat_pending
+  i32.const 0)
+(func $host_claim (param $t i32) (result i32)
+  global.get $plat_pending ref.as_non_null array.len)
+(export "cabi_realloc" (func $cabi_realloc))
+"#,
+            w = n[0], pa = n[1], fm = n[2], pr = n[3], ma = n[4], ho = n[5], ok = n[6], ha = n[7]
+        );
+        cg.exports.retain(|e| !e.contains("\"test_"));
+    } else {
     out.push_str("(import \"puddi\" \"write\" (func $host_write (param i32 i32 i32)))\n");
     out.push_str("(import \"puddi\" \"panic\" (func $host_panic (param i32 i32)))\n");
     out.push_str("(import \"puddi\" \"fmt_f64\" (func $host_fmt_f64 (param f64 i32 i32) (result i32)))\n");
@@ -1616,6 +1782,9 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
     out.push_str("(import \"puddi\" \"host\" (func $host_op (param i32 i32 i32) (result i32)))\n");
     out.push_str("(import \"puddi\" \"host_take\" (func $host_take (param i32)))\n");
     out.push_str("(import \"puddi\" \"host_ok\" (func $host_ok (result i32)))\n");
+    out.push_str("(import \"puddi\" \"host_async\" (func $host_async (param i32 i32 i32) (result i32)))\n");
+    out.push_str("(import \"puddi\" \"host_claim\" (func $host_claim (param i32) (result i32)))\n");
+    }
     for i in &cg.imports {
         out.push_str(i);
         out.push('\n');
@@ -1646,6 +1815,7 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
     for f in &cg.funcs {
         out.push_str(f);
     }
+    out.push_str(&cg.tail);
     for e in &cg.exports {
         out.push_str(e);
         out.push('\n');

@@ -4,6 +4,7 @@
 
 mod ast;
 mod codegen;
+mod deps;
 mod derive;
 mod diag;
 mod driver;
@@ -14,8 +15,11 @@ mod lexer;
 mod numeric;
 mod parser;
 mod program;
+#[cfg(feature = "runtime")]
+mod runner;
 mod tools;
 mod types;
+mod wit;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -31,6 +35,9 @@ struct Manifest {
     package: PackageInfo,
     #[serde(default)]
     deps: toml::Table,
+    /// Per-target settings, e.g. `[target.plugin] world = "wit/host.wit#plugin"`.
+    #[serde(default)]
+    target: toml::Table,
 }
 
 #[derive(serde::Deserialize)]
@@ -48,6 +55,22 @@ struct Project {
     dir: Option<PathBuf>,
     files: Vec<UserFile>,
     root: String,
+    targets: toml::Table,
+}
+
+impl Project {
+    /// The component world for a target, if it builds a component.
+    fn world(&self, target: &str) -> Result<Option<String>, String> {
+        let configured = self.targets.get(target).and_then(|t| t.get("world")).map(|w| w.as_str().map(|s| s.to_string()).ok_or_else(|| format!("`target.{target}.world` in pud.toml must be a string")));
+        match target {
+            "wasi" => Ok(Some(configured.transpose()?.unwrap_or_else(|| "wasi:cli/command".into()))),
+            "plugin" => match configured.transpose()? {
+                Some(w) => Ok(Some(w)),
+                None => Err("the plugin target needs a world: add `[target.plugin]` with `world = \"wit/<file>.wit#<world>\"` to pud.toml".into()),
+            },
+            _ => Ok(None),
+        }
+    }
 }
 
 fn usage() -> &'static str {
@@ -64,6 +87,8 @@ usage:
   pud check [path|file.pud]      type-check without generating code
   pud fmt [files...] [--check]   format sources in the single official style
   pud doc [path]                 write Markdown docs for public items to target/doc
+  pud add <repo@version|path> [--name n]
+                                 add a dependency to pud.toml and update pud.lock
   pud version                    print the version
 "
 }
@@ -108,14 +133,20 @@ fn load_project(path: Option<&str>) -> Result<Project, String> {
         }
         let text = std::fs::read_to_string(&p).map_err(|e| format!("cannot read {}: {e}", p.display()))?;
         let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "main".into());
-        return Ok(Project { name, dir: None, files: vec![UserFile { module: "main".into(), display: p.display().to_string(), text }], root: "main".into() });
+        return Ok(Project { name, dir: None, files: vec![user_file("main".into(), p.display().to_string(), text)], root: "main".into(), targets: Default::default() });
     }
     let dir = find_manifest(&p).ok_or_else(|| format!("could not find pud.toml in {} or any parent directory", p.display()))?;
     let mtext = std::fs::read_to_string(dir.join("pud.toml")).map_err(|e| format!("cannot read pud.toml: {e}"))?;
     let manifest: Manifest = toml::from_str(&mtext).map_err(|e| format!("invalid pud.toml: {e}"))?;
-    if !manifest.deps.is_empty() {
-        return Err("dependencies in [deps] are not supported by this compiler yet".into());
+    let mut root_deps = Vec::new();
+    for (k, v) in &manifest.deps {
+        root_deps.push((k.clone(), deps::parse_spec(k, v, &dir)?));
     }
+    let resolution = if root_deps.is_empty() {
+        None
+    } else {
+        Some(deps::resolve(&root_deps, Some(&dir.join("pud.lock")), true)?)
+    };
     let src = dir.join("src");
     let mut found = Vec::new();
     collect_pud(&src, &src, &mut found).map_err(|e| format!("cannot read {}: {e}", src.display()))?;
@@ -130,9 +161,24 @@ fn load_project(path: Option<&str>) -> Result<Project, String> {
     for (module, path) in found {
         let text = std::fs::read_to_string(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let display = path.strip_prefix(&dir).unwrap_or(&path).display().to_string();
-        files.push(UserFile { module, display, text });
+        let mut f = user_file(module, display, text);
+        if let Some(r) = &resolution {
+            f.aliases = r.root_aliases.clone();
+        }
+        files.push(f);
     }
-    Ok(Project { name: manifest.package.name, dir: Some(dir), files, root: root.into() })
+    if let Some(r) = resolution {
+        for (i, pkg) in r.packages.into_iter().enumerate() {
+            for (module, display, text) in pkg.files {
+                files.push(UserFile { module: format!("{}.{module}", pkg.prefix), display, text, pkg: program::Pkg::Dep(i as u16), prefix: pkg.prefix.clone(), aliases: pkg.aliases.clone() });
+            }
+        }
+    }
+    Ok(Project { name: manifest.package.name, dir: Some(dir), files, root: root.into(), targets: manifest.target })
+}
+
+fn user_file(module: String, display: String, text: String) -> UserFile {
+    UserFile { module, display, text, pkg: program::Pkg::User, prefix: String::new(), aliases: Default::default() }
 }
 
 fn report(sm: &SourceMap, diags: &[diag::Diag]) {
@@ -143,13 +189,29 @@ fn report(sm: &SourceMap, diags: &[diag::Diag]) {
 
 struct BuildResult {
     out_dir: PathBuf,
+    /// The core module for the JavaScript host.
     wasm_path: PathBuf,
+    /// The component, for `wasi` and `plugin` builds.
+    component: Option<(PathBuf, Vec<u8>)>,
 }
 
 fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat: bool) -> Result<BuildResult, ExitCode> {
     let mut sm = SourceMap::default();
     let name = proj.name.clone();
-    let compiled = match driver::compile(&mut sm, proj.files, &proj.root, target, mode) {
+    // tests run on the JavaScript host; everything else for wasi/plugin is a component
+    let node_host = target == "wasi" && std::env::var("PUD_HOST").as_deref() == Ok("node");
+    let comp = if mode == Mode::Test || target == "browser" || node_host {
+        None
+    } else {
+        match proj.world(target) {
+            Ok(w) => w.map(|world| driver::ComponentOpts { pkg_dir: proj.dir.clone(), world }),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return Err(ExitCode::from(1));
+            }
+        }
+    };
+    let compiled = match driver::compile(&mut sm, proj.files, &proj.root, target, mode, comp) {
         Ok(c) => c,
         Err(errs) => {
             report(&sm, &errs);
@@ -160,7 +222,7 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
     };
     report(&sm, &compiled.warnings);
     if mode == Mode::Check {
-        return Ok(BuildResult { out_dir: PathBuf::new(), wasm_path: PathBuf::new() });
+        return Ok(BuildResult { out_dir: PathBuf::new(), wasm_path: PathBuf::new(), component: None });
     }
     let out_dir = match out {
         Some(o) => o,
@@ -173,7 +235,7 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
         eprintln!("error: cannot create {}: {e}", out_dir.display());
         return Err(ExitCode::from(1));
     }
-    let wasm_path = out_dir.join(format!("{name}.wasm"));
+    let wasm_path = out_dir.join(if compiled.component.is_some() { format!("{name}.core.wasm") } else { format!("{name}.wasm") });
     let write = |p: PathBuf, data: &[u8]| -> Result<(), ExitCode> {
         std::fs::write(&p, data).map_err(|e| {
             eprintln!("error: cannot write {}: {e}", p.display());
@@ -181,6 +243,14 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
         })
     };
     write(wasm_path.clone(), &compiled.wasm)?;
+    let component = match compiled.component {
+        Some(c) => {
+            let p = out_dir.join(format!("{name}.wasm"));
+            write(p.clone(), &c)?;
+            Some((p, c))
+        }
+        None => None,
+    };
     write(out_dir.join("puddi.mjs"), RUNTIME.as_bytes())?;
     if emit_wat {
         write(out_dir.join(format!("{name}.wat")), compiled.wat.as_bytes())?;
@@ -191,11 +261,11 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
     }
     if target == "browser" && mode == Mode::Build {
         let html = format!(
-            "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{name}</title>\n<style>body{{font:14px/1.5 ui-monospace,monospace;margin:16px;background:#fafafa;color:#222}}pre{{white-space:pre-wrap}}.err{{color:#b00}}</style>\n</head>\n<body>\n<pre id=\"out\"></pre>\n<script type=\"module\">\nimport {{ load }} from \"./puddi.mjs\";\nconst out = document.getElementById(\"out\");\nconst app = await load(\"./{name}.wasm\", {{ output(fd, line) {{ const s = document.createElement(\"span\"); if (fd === 2) s.className = \"err\"; s.textContent = line + \"\\n\"; out.append(s); (fd === 2 ? console.error : console.log)(line); }} }});\napp.run();\n</script>\n</body>\n</html>\n"
+            "<!doctype html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{name}</title>\n<style>body{{font:14px/1.5 ui-monospace,monospace;margin:16px;background:#fafafa;color:#222}}pre{{white-space:pre-wrap}}.err{{color:#b00}}</style>\n</head>\n<body>\n<pre id=\"out\"></pre>\n<script type=\"module\">\nimport {{ load }} from \"./puddi.mjs\";\nconst out = document.getElementById(\"out\");\nconst app = await load(\"./{name}.wasm\", {{ output(fd, line) {{ const s = document.createElement(\"span\"); if (fd === 2) s.className = \"err\"; s.textContent = line + \"\\n\"; out.append(s); (fd === 2 ? console.error : console.log)(line); }} }});\nawait app.run();\n</script>\n</body>\n</html>\n"
         );
         write(out_dir.join("index.html"), html.as_bytes())?;
     }
-    Ok(BuildResult { out_dir, wasm_path })
+    Ok(BuildResult { out_dir, wasm_path, component })
 }
 
 fn json_str(s: &str) -> String {
@@ -222,6 +292,17 @@ fn node_run(res: &BuildResult, cmd: &str, args: &[String]) -> ExitCode {
         },
         Err(e) => fail(format!("could not start `node` ({e}); Node.js 22 or newer is needed to run Puddi programs")),
     }
+}
+
+#[cfg(feature = "runtime")]
+fn run_component(res: &BuildResult, program: &str, args: &[String]) -> ExitCode {
+    let (_, bytes) = res.component.as_ref().unwrap();
+    ExitCode::from(runner::run(bytes, program, args))
+}
+
+#[cfg(not(feature = "runtime"))]
+fn run_component(res: &BuildResult, _program: &str, _args: &[String]) -> ExitCode {
+    fail(format!("this `pud` was built without the embedded runtime; run {} with a WASI 0.3 host such as `wasmtime run -Wcomponent-model-async -Wgc`, or set PUD_HOST=node", res.component.as_ref().unwrap().0.display()))
 }
 
 fn new_package(name: &str) -> ExitCode {
@@ -264,6 +345,7 @@ fn main() -> ExitCode {
     let mut target = "wasi".to_string();
     let mut emit_wat = false;
     let mut check_only = false;
+    let mut name_opt: Option<String> = None;
     let mut out = None;
     let mut positional = Vec::new();
     let mut i = 0;
@@ -279,6 +361,10 @@ fn main() -> ExitCode {
             }
             "--emit-wat" => emit_wat = true,
             "--check" => check_only = true,
+            "--name" => {
+                i += 1;
+                name_opt = opts.get(i).cloned();
+            }
             "-o" | "--out" => {
                 i += 1;
                 match opts.get(i) {
@@ -308,16 +394,26 @@ fn main() -> ExitCode {
                 _ => Mode::Build,
             };
             let has_dir = proj.dir.is_some();
+            let program_name = proj.name.clone();
             let res = match build(proj, &target, mode, out, emit_wat) {
                 Ok(r) => r,
                 Err(c) => return c,
             };
             match cmd.as_str() {
                 "build" => {
-                    println!("built {}", res.wasm_path.display());
+                    println!("built {}", res.component.as_ref().map(|c| &c.0).unwrap_or(&res.wasm_path).display());
                     ExitCode::SUCCESS
                 }
+                "run" if target == "plugin" => fail("plugins are loaded by their host application; `pud build --target plugin` produces the component"),
+                "run" if res.component.is_some() && std::env::var("PUD_HOST").as_deref() != Ok("node") => {
+                    let code = run_component(&res, &program_name, prog_args);
+                    if !has_dir {
+                        let _ = std::fs::remove_dir_all(&res.out_dir);
+                    }
+                    code
+                }
                 "check" => ExitCode::SUCCESS,
+                "run" if target == "browser" && mode == Mode::Build => serve(&res.out_dir, &res.wasm_path),
                 "run" => {
                     let code = node_run(&res, "run", prog_args);
                     if !has_dir {
@@ -337,7 +433,7 @@ fn main() -> ExitCode {
         }
         "fmt" => run_fmt(&positional, check_only),
         "doc" => run_doc(positional.first().map(|s| s.as_str())),
-        "add" => fail("`pud add` is not available: package dependencies are not supported by this version of the toolchain"),
+        "add" => run_add(&positional, name_opt.as_deref()),
         "version" | "--version" | "-V" => {
             println!("pud {VERSION}");
             ExitCode::SUCCESS
@@ -394,7 +490,7 @@ fn run_doc(path: Option<&str>) -> ExitCode {
         Err(e) => return fail(e),
     };
     let mut page = format!("# {}\n\n", proj.name);
-    for f in &proj.files {
+    for f in proj.files.iter().filter(|f| f.pkg == program::Pkg::User) {
         if let Some(d) = tools::doc(&f.module, &f.text) {
             page.push_str(&d);
         }
@@ -414,4 +510,89 @@ fn run_doc(path: Option<&str>) -> ExitCode {
         }
         Err(e) => fail(format!("cannot write {}: {e}", file.display())),
     }
+}
+
+fn run_add(positional: &[String], name: Option<&str>) -> ExitCode {
+    let Some(arg) = positional.first() else {
+        return fail("usage: pud add <github.com/user/repo[@version]|path> [--name n]");
+    };
+    let Some(dir) = find_manifest(Path::new(".")) else {
+        return fail("could not find pud.toml in this directory or any parent directory");
+    };
+    let (n, value) = match deps::add_entry(arg, name, &dir) {
+        Ok(x) => x,
+        Err(e) => return fail(e),
+    };
+    let mpath = dir.join("pud.toml");
+    let text = match std::fs::read_to_string(&mpath) {
+        Ok(t) => t,
+        Err(e) => return fail(format!("cannot read pud.toml: {e}")),
+    };
+    let new_text = deps::edit_manifest(&text, &n, &value);
+    if let Err(e) = std::fs::write(&mpath, &new_text) {
+        return fail(format!("cannot write pud.toml: {e}"));
+    }
+    match load_project(Some(dir.to_str().unwrap_or("."))) {
+        Ok(_) => {
+            println!("added {n} = {value}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            let _ = std::fs::write(&mpath, text);
+            fail(e)
+        }
+    }
+}
+
+/// `pud run --target browser`: a development server for the built page.
+fn serve(dir: &Path, wasm: &Path) -> ExitCode {
+    use std::io::{BufRead, BufReader, Write};
+    let port: u16 = std::env::var("PUD_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8000);
+    let listener = match (port..port + 20).find_map(|p| std::net::TcpListener::bind(("127.0.0.1", p)).ok()) {
+        Some(l) => l,
+        None => return fail(format!("no free port between {port} and {}", port + 19)),
+    };
+    let addr = listener.local_addr().unwrap();
+    println!("serving {} at http://{addr}/ (press Ctrl-C to stop)", wasm.display());
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { continue };
+        let mut reader = BufReader::new(match stream.try_clone() {
+            Ok(s) => s,
+            Err(_) => continue,
+        });
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() {
+            continue;
+        }
+        loop {
+            let mut h = String::new();
+            if reader.read_line(&mut h).map(|n| n == 0).unwrap_or(true) || h.trim().is_empty() {
+                break;
+            }
+        }
+        let path = line.split_whitespace().nth(1).unwrap_or("/").split('?').next().unwrap_or("/");
+        let rel = if path == "/" { "index.html" } else { path.trim_start_matches('/') };
+        let file = dir.join(rel);
+        let safe = !rel.split('/').any(|c| c == "..");
+        let resp = match std::fs::read(&file) {
+            Ok(body) if safe => {
+                let ct = match file.extension().and_then(|e| e.to_str()) {
+                    Some("html") => "text/html; charset=utf-8",
+                    Some("mjs") | Some("js") => "text/javascript; charset=utf-8",
+                    Some("wasm") => "application/wasm",
+                    Some("css") => "text/css; charset=utf-8",
+                    Some("json") => "application/json",
+                    Some("svg") => "image/svg+xml",
+                    Some("png") => "image/png",
+                    _ => "application/octet-stream",
+                };
+                let mut r = format!("HTTP/1.1 200 OK\r\nContent-Type: {ct}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                r.extend(body);
+                r
+            }
+            _ => b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\nConnection: close\r\n\r\nnot found".to_vec(),
+        };
+        let _ = stream.write_all(&resp);
+    }
+    ExitCode::SUCCESS
 }

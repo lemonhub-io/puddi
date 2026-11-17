@@ -1,5 +1,6 @@
-//! Conformance tests: compile and run every program in tests/run with Node.js
-//! and compare its output; check that programs in tests/fail are rejected
+//! Conformance tests: compile and run every program in tests/run (as a WASI
+//! component with the embedded Wasmtime, or with Node.js for programs marked
+//! `// host: node`) and compare its output; check that programs in tests/fail are rejected
 //! with the expected diagnostics.
 
 use std::path::Path;
@@ -25,7 +26,13 @@ fn run_programs() {
     for src in sorted("tests/run", "pud") {
         let expected_out = src.with_extension("out");
         let is_test = std::fs::read_to_string(&src).unwrap().contains("\ntest \"") && !expected_out.exists();
-        let out = if is_test { pud().arg("test").arg(&src).output().unwrap() } else { pud().arg("run").arg(&src).output().unwrap() };
+        let text_src = std::fs::read_to_string(&src).unwrap();
+        let mut cmd = pud();
+        if text_src.starts_with("// host: node") {
+            // needs the concurrent scheduler of the JavaScript host
+            cmd.env("PUD_HOST", "node");
+        }
+        let out = if is_test { cmd.arg("test").arg(&src).output().unwrap() } else { cmd.arg("run").arg(&src).output().unwrap() };
         let code = out.status.code().unwrap_or(-1);
         let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
         let want_code: i32 = std::fs::read_to_string(src.with_extension("code")).map(|s| s.trim().parse().unwrap()).unwrap_or(if is_test { 1 } else { 0 });

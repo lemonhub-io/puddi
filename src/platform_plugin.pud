@@ -1,0 +1,56 @@
+// ---------------------------------------------------------------- plugin platform
+// Components for host-defined worlds get no ambient I/O: output is discarded,
+// panics trap, and floats are formatted in software.
+
+pub fn __plat_write(fd: Int, s: Str) {}
+
+pub fn __plat_panic(msg: Str) {}
+
+pub fn __plat_fmt(x: Float, is32: Bool) -> Str {
+    if is32 { __soft_fmt_f32(x.round_to_f32()) } else { __soft_fmt_f64(x) }
+}
+
+pub fn __plat_parse(s: Str) -> Float { __soft_parse_f64(s) }
+
+pub fn __plat_math(op: Int, x: Float, y: Float) -> Float {
+    match op {
+        0 -> __soft_pow(x, y)
+        1 -> __soft_sin(x)
+        2 -> __soft_cos(x)
+        3 -> __soft_tan(x)
+        4 -> __soft_asin(x)
+        5 -> __soft_acos(x)
+        6 -> __soft_atan(x)
+        7 -> __soft_atan2(x, y)
+        8 -> __soft_exp(x)
+        9 -> __soft_ln(x)
+        10 -> __soft_log2(x)
+        11 -> __soft_log10(x)
+        12 -> __soft_cbrt(x)
+        13 -> __soft_hypot(x, y)
+        _ -> 0.0
+    }
+}
+
+struct __PlatState {
+    var ok: Bool
+}
+
+fn __plat_state() -> __PlatState { __global(__PlatState { ok: true }) }
+
+pub fn __plat_ok() -> Bool { __plat_state().ok }
+
+pub fn __plat_host(op: Int, arg: Str) -> Str {
+    if op == 40 {
+        __run_task(arg.parse_int().unwrap())
+        return "0"
+    }
+    if op == 42 || op == 41 || op == 43 { return "0" }
+    __plat_state().ok = false
+    "operation {op} is not available in a plugin"
+}
+
+pub fn __plat_host_async(op: Int, arg: Str) -> Str {
+    if op == 102 { return "" }
+    __plat_host(op, arg)
+}

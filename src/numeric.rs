@@ -110,7 +110,7 @@ fn int_impls(s: &mut String, it: IntTy) {
         let _ = writeln!(s, "impl Neg for {n} {{ fn neg(self) -> {n} {{ 0 - self }} }}");
     }
     let _ = writeln!(s, "impl Not for {n} {{ fn not(self) -> {n} {{ !self }} }}");
-    let _ = writeln!(s, "impl Transfer for {n} {{}}");
+    let _ = writeln!(s, "impl Transfer for {n} {{ fn __enc(self, b: StrBuilder) {{ __enc_int(b, __cast<{n}, I64>(self)) }} fn __dec(r: __Reader) -> {n} {{ __cast<I64, {n}>(r.i64()) }} }}");
 }
 
 fn float_impls(s: &mut String, n: &str) {
@@ -169,5 +169,6 @@ fn float_impls(s: &mut String, n: &str) {
         let _ = writeln!(s, "impl {t} for {n} {{ fn {m}(self, other: {n}) -> {n} {{ self {op} other }} }}");
     }
     let _ = writeln!(s, "impl Neg for {n} {{ fn neg(self) -> {n} {{ -self }} }}");
-    let _ = writeln!(s, "impl Transfer for {n} {{}}");
+    let bits = if n == "F32" { "U32" } else { "U64" };
+    let _ = writeln!(s, "impl Transfer for {n} {{ fn __enc(self, b: StrBuilder) {{ __enc_int(b, __cast<{bits}, I64>(self.to_bits())) }} fn __dec(r: __Reader) -> {n} {{ {n}.from_bits(__cast<I64, {bits}>(r.i64())) }} }}");
 }

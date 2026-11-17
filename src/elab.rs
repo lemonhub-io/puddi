@@ -31,6 +31,8 @@ pub struct Global<'p> {
     pub vtable_order: Vec<(Ty, TraitRef)>,
     pub entry: Option<usize>,
     pub tests: Vec<(String, usize)>,
+    /// Functions run by `__worker_entry(k)` in a worker instance.
+    pub worker_entries: Vec<usize>,
 }
 
 impl<'p> Global<'p> {
@@ -47,6 +49,7 @@ impl<'p> Global<'p> {
             vtable_order: Vec::new(),
             entry: None,
             tests: Vec::new(),
+            worker_entries: Vec::new(),
         }
     }
 
@@ -214,7 +217,7 @@ pub fn fn_display_name(prog: &Program, inst: &FnInst) -> String {
         }
         FnOwner::Free => {
             let m = &prog.modules[f.module];
-            if m.pkg == Pkg::User && m.path != "main" && !m.path.is_empty() {
+            if m.pkg.is_source() && m.path != "main" && !m.path.is_empty() {
                 s.push_str(&m.path);
                 s.push('.');
             }
@@ -1035,6 +1038,12 @@ impl<'g, 'p> Elab<'g, 'p> {
                 if self.lookup_local_peek(&id.name) {
                     return None;
                 }
+                // generic parameters are concrete here (generics are monomorphized)
+                if let Some(i) = self.gen_names.iter().position(|g| g == &id.name) {
+                    if let Some(t) = self.targs.get(i) {
+                        return Some(PathRes::Type(t.clone()));
+                    }
+                }
                 let def = self.prog.lookup(self.module, &id.name)?;
                 Some(self.def_res(def, targs, id))
             }
@@ -1435,7 +1444,7 @@ impl<'g, 'p> Elab<'g, 'p> {
             let m = if msg.is_empty() { String::new() } else { format!(": {msg}") };
             self.g.warn(Diag::new(span, format!("`{}` is deprecated{m}", f.name)));
         }
-        if f.module != self.module && !f.is_pub && f.pkg == Pkg::User {
+        if f.module != self.module && !f.is_pub && f.pkg.is_source() {
             self.err(span, format!("`{}` is private", f.name));
         }
         let targs = self.make_targs(fid, prefix, explicit, span);
@@ -1555,6 +1564,45 @@ impl<'g, 'p> Elab<'g, 'p> {
         None
     }
 
+    /// `s.worker(f)`: `f` must name a top-level async function taking a
+    /// `worker.Port<In, Out>`; the worker instance runs it by index.
+    fn worker_call(&mut self, recv: Expr, arg: &ast::Expr, span: Span) -> Expr {
+        let f = self.expr(arg, None);
+        let ExprKind::FnValue(inst) = &f.kind else {
+            self.err(arg.span, "`worker` takes the name of a top-level async function, not a closure or other value");
+            return mk(ExprKind::Unreachable, Ty::Error, span);
+        };
+        let fd = &self.prog.fns[inst.fn_id];
+        if !matches!(fd.owner, FnOwner::Free) || !fd.decl.is_async {
+            self.err(arg.span, "`worker` takes the name of a top-level `async fn`");
+            return mk(ExprKind::Unreachable, Ty::Error, span);
+        }
+        let ft = self.resolve(&f.ty);
+        let ports = match &ft {
+            Ty::Fn(ps, r) if ps.len() == 1 => match (self.resolve(&ps[0]), self.resolve(r)) {
+                (Ty::Adt(pid, ta), Ty::Adt(_, ra)) if self.prog.adts[pid].name == "__Port" && ta.len() == 2 && ra.len() == 1 && self.resolve(&ra[0]) == Ty::Unit => Some((ta[0].clone(), ta[1].clone())),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some((i, o)) = ports else {
+            let s = self.tys(&ft);
+            self.err(arg.span, format!("a worker function must have the signature `async fn(worker.Port<In, Out>)`, found `{s}`"));
+            return mk(ExprKind::Unreachable, Ty::Error, span);
+        };
+        let Some(Def::Fn(wm)) = self.prog.lookup(self.prog.prelude, "__worker_main") else {
+            self.err(span, "internal error: missing `__worker_main` in the prelude");
+            return mk(ExprKind::Unreachable, Ty::Error, span);
+        };
+        let idx = self.g.reserve();
+        let body = mk(ExprKind::Call(FnInst { fn_id: wm, targs: vec![i.clone(), o.clone()] }, vec![f]), Ty::Unit, span);
+        let func = ir::Func { name: format!("worker_entry{idx}"), params: Vec::new(), locals: Vec::new(), ret: Ty::Unit, body, is_closure: false, export: None, extern_: None };
+        self.closures.push((idx, func));
+        let k = self.g.worker_entries.len();
+        self.g.worker_entries.push(idx);
+        self.method_call(recv, "__start_worker", &[i, o], vec![ae(ast::ExprKind::Int(k as u128), span)], span, None)
+    }
+
     fn method_call(&mut self, recv: Expr, name: &str, explicit: &[Ty], args: Vec<ast::Expr>, span: Span, expect: Option<&Ty>) -> Expr {
         let rt0 = self.resolve(&recv.ty);
         let rt = match self.var_kind(&rt0) {
@@ -1576,6 +1624,9 @@ impl<'g, 'p> Elab<'g, 'p> {
         }
         if let Ty::Dyn(tid, targs, assoc) = &rt {
             return self.dyn_call(recv, *tid, targs.clone(), assoc.clone(), name, args, span);
+        }
+        if name == "worker" && args.len() == 1 && matches!(&rt, Ty::Adt(id, _) if self.prog.adts[*id].name == "Scope" && self.prog.adts[*id].pkg == Pkg::Prelude) {
+            return self.worker_call(recv, &args[0], span);
         }
         if let Some((fid, prefix)) = self.find_method(&rt, name, span) {
             if !self.prog.fns[fid].has_self {
@@ -2453,7 +2504,7 @@ impl<'g, 'p> Elab<'g, 'p> {
             }
             _ => unreachable!(),
         };
-        let foreign = adt.module != self.module && adt.pkg == Pkg::User;
+        let foreign = adt.module != self.module && adt.pkg.is_source();
         let mut slots: Vec<Option<Expr>> = vec![None; defs.len()];
         let mut order = Vec::new();
         for (name, val) in fields {
@@ -3111,7 +3162,7 @@ fn is_const_expr(e: &ast::Expr) -> bool {
 
 fn callee_is_variant_like(f: &ast::Expr) -> bool {
     match &f.kind {
-        ast::ExprKind::Name(id, _) | ast::ExprKind::Field(_, id, _) => id.name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false),
+        ast::ExprKind::Name(id, _) | ast::ExprKind::Field(_, id, _) => crate::parser::type_like(&id.name),
         _ => false,
     }
 }

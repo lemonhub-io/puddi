@@ -18,3 +18,9 @@ impl Instant {
     pub fn now() -> Instant { Instant { ms: monotonic_ms() } }
     pub fn elapsed_ms(self) -> Float { monotonic_ms() - self.ms }
 }
+
+/// Suspends the current task for at least `ms` milliseconds.
+pub async fn sleep(ms: Int) { __host_async(100, "{ms}") }
+
+/// Lets other tasks run before continuing.
+pub async fn yield_now() { __host_async(100, "0") }

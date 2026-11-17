@@ -1,0 +1,115 @@
+// std.http: HTTP client.
+
+import std.json
+
+pub enum HttpErr {
+    /// The request could not be sent or no response arrived.
+    Network(Str)
+    /// The URL could not be parsed.
+    InvalidUrl(Str)
+    /// The response body was not what the caller asked for.
+    Body(Str)
+}
+
+impl Show for HttpErr {
+    fn show(self) -> Str {
+        match self {
+            HttpErr.Network(m) -> "network error: {m}"
+            HttpErr.InvalidUrl(u) -> "invalid URL: {u}"
+            HttpErr.Body(m) -> "invalid response body: {m}"
+        }
+    }
+}
+
+impl Error for HttpErr {}
+
+pub struct Request {
+    pub method: Str
+    pub url: Str
+    pub headers: List<(Str, Str)>
+    pub body: Str
+}
+
+impl Request {
+    pub fn new(method: Str, url: Str) -> Request { Request { method, url, headers: [], body: "" } }
+    pub fn header(self, name: Str, value: Str) -> Request {
+        let hs: List<(Str, Str)> = []
+        for h in self.headers { hs.push(h) }
+        hs.push((name, value))
+        Request { method: self.method, url: self.url, headers: hs, body: self.body }
+    }
+    pub fn with_body(self, body: Str) -> Request { Request { method: self.method, url: self.url, headers: self.headers, body } }
+    pub async fn send(self) -> Result<Response, HttpErr> { request(self).await }
+}
+
+pub struct Response {
+    pub status: Int
+    pub headers: List<(Str, Str)>
+    body: Str
+}
+
+impl Response {
+    /// Whether the status is in the 200-299 range.
+    pub fn ok(self) -> Bool { self.status >= 200 && self.status < 300 }
+    /// The first header with this name, compared case-insensitively.
+    pub fn header(self, name: Str) -> Option<Str> {
+        let n = name.to_lower()
+        for (k, v) in self.headers {
+            if k.to_lower() == n { return Some(v) }
+        }
+        None
+    }
+    pub async fn text(self) -> Result<Str, HttpErr> { Ok(self.body) }
+    pub async fn json(self) -> Result<json.Json, HttpErr> {
+        match json.parse(self.body) {
+            Ok(v) -> Ok(v)
+            Err(e) -> Err(HttpErr.Body(e.show()))
+        }
+    }
+}
+
+/// Sends a request and waits for the response.
+pub async fn request(req: Request) -> Result<Response, HttpErr> {
+    if !(req.url.starts_with("http://") || req.url.starts_with("https://")) {
+        return Err(HttpErr.InvalidUrl(req.url))
+    }
+    let b = StrBuilder.new()
+    b.push(req.method)
+    b.push("\0")
+    b.push(req.url)
+    b.push("\0")
+    for (k, v) in req.headers {
+        b.push(k)
+        b.push(":")
+        b.push(v)
+        b.push("\n")
+    }
+    b.push("\0")
+    b.push(req.body)
+    let r = __host_async(101, b.to_str())
+    if !__host_ok() { return Err(HttpErr.Network(r)) }
+    let parts = r.split("\0")
+    let status = parts[0].parse_int().unwrap_or(0)
+    let headers: List<(Str, Str)> = []
+    for line in parts[1].split("\n") {
+        match split_header(line) {
+            Some(h) -> headers.push(h)
+            None -> {}
+        }
+    }
+    Ok(Response { status, headers, body: parts.slice(2, parts.len()).join("\0") })
+}
+
+fn split_header(line: Str) -> Option<(Str, Str)> {
+    let n = __str_len(line)
+    for i in 0..n {
+        if __str_byte(line, i) == 58 { return Some((__str_slice(line, 0, i), __str_slice(line, i + 1, n).trim())) }
+    }
+    None
+}
+
+pub async fn get(url: Str) -> Result<Response, HttpErr> { request(Request.new("GET", url)).await }
+
+pub async fn post(url: Str, body: Str) -> Result<Response, HttpErr> {
+    request(Request.new("POST", url).with_body(body)).await
+}

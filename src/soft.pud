@@ -1,0 +1,646 @@
+// ---------------------------------------------------------------- pure float formatting, parsing and math
+// Used on targets without a JavaScript host (WASI and plugin components).
+
+// Big natural numbers as little-endian base-2^32 limbs.
+
+fn __big(v: I64) -> List<I64> {
+    let out: List<I64> = []
+    var x = v
+    while x > 0 {
+        out.push(x & 0xFFFFFFFF)
+        x = x >> 32
+    }
+    out
+}
+
+fn __big_trim(a: List<I64>) {
+    while a.len() > 0 && a[a.len() - 1] == 0 { a.pop() }
+}
+
+fn __big_mul_small(a: List<I64>, m: I64) -> List<I64> {
+    let out: List<I64> = List.with_capacity(a.len() + 1)
+    var carry: I64 = 0
+    for x in a {
+        let t = x * m + carry
+        out.push(t & 0xFFFFFFFF)
+        carry = t >> 32
+    }
+    while carry > 0 {
+        out.push(carry & 0xFFFFFFFF)
+        carry = carry >> 32
+    }
+    out
+}
+
+fn __big_mul_pow10(a: List<I64>, n: Int) -> List<I64> {
+    var r = a
+    var k = n
+    while k >= 4 {
+        r = __big_mul_small(r, 10000)
+        k -= 4
+    }
+    while k > 0 {
+        r = __big_mul_small(r, 10)
+        k -= 1
+    }
+    r
+}
+
+fn __big_add(a: List<I64>, b: List<I64>) -> List<I64> {
+    let n = if a.len() > b.len() { a.len() } else { b.len() }
+    let out: List<I64> = List.with_capacity(n + 1)
+    var carry: I64 = 0
+    for i in 0..n {
+        let t = (if i < a.len() { a[i] } else { 0 }) + (if i < b.len() { b[i] } else { 0 }) + carry
+        out.push(t & 0xFFFFFFFF)
+        carry = t >> 32
+    }
+    if carry > 0 { out.push(carry) }
+    out
+}
+
+/// a - b, requires a >= b.
+fn __big_sub(a: List<I64>, b: List<I64>) -> List<I64> {
+    let out: List<I64> = List.with_capacity(a.len())
+    var borrow: I64 = 0
+    for i in 0..a.len() {
+        var t = a[i] - (if i < b.len() { b[i] } else { 0 }) - borrow
+        if t < 0 {
+            t += 0x100000000
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        out.push(t)
+    }
+    __big_trim(out)
+    out
+}
+
+fn __big_cmp(a: List<I64>, b: List<I64>) -> Int {
+    __big_trim(a)
+    __big_trim(b)
+    if a.len() != b.len() { return if a.len() < b.len() { -1 } else { 1 } }
+    var i = a.len() - 1
+    while i >= 0 {
+        if a[i] != b[i] { return if a[i] < b[i] { -1 } else { 1 } }
+        i -= 1
+    }
+    0
+}
+
+fn __big_shl(a: List<I64>, n: Int) -> List<I64> {
+    let words = n / 32
+    let bits = n % 32
+    let out: List<I64> = List.with_capacity(a.len() + words + 1)
+    for _ in 0..words { out.push(0) }
+    var carry: I64 = 0
+    for x in a {
+        let t = (x << bits) | carry
+        out.push(t & 0xFFFFFFFF)
+        carry = t >> 32
+    }
+    if carry > 0 { out.push(carry) }
+    out
+}
+
+fn __big_bitlen(a: List<I64>) -> Int {
+    __big_trim(a)
+    if a.len() == 0 { return 0 }
+    var top = a[a.len() - 1]
+    var n = 0
+    while top > 0 {
+        top = top >> 1
+        n += 1
+    }
+    (a.len() - 1) * 32 + n
+}
+
+fn __big_is_zero(a: List<I64>) -> Bool {
+    __big_trim(a)
+    a.len() == 0
+}
+
+// ---- shortest round-trip formatting (Burger and Dybvig's free-format algorithm)
+
+/// Digits and decimal exponent k with value = 0.d1d2... * 10^k, for a positive finite value
+/// with integer mantissa `f`, binary exponent `e`, precision `p` and minimum exponent `min_e`.
+fn __shortest(f: I64, e: Int, p: Int, min_e: Int) -> (List<Int>, Int) {
+    let even = (f & 1) == 0
+    let hidden: I64 = __cast<Int, I64>(1) << (p - 1)
+    var r: List<I64> = []
+    var s: List<I64> = []
+    var mp: List<I64> = []
+    var mm: List<I64> = []
+    if e >= 0 {
+        let be = __big_shl(__big(1), e)
+        if f != hidden {
+            r = __big_shl(__big(f), e + 1)
+            s = __big(2)
+            mp = be
+            mm = be
+        } else {
+            r = __big_shl(__big(f), e + 2)
+            s = __big(4)
+            mp = __big_shl(be, 1)
+            mm = be
+        }
+    } else if e == min_e || f != hidden {
+        r = __big(f * 2)
+        s = __big_shl(__big(1), 1 - e)
+        mp = __big(1)
+        mm = __big(1)
+    } else {
+        r = __big(f * 4)
+        s = __big_shl(__big(1), 2 - e)
+        mp = __big(2)
+        mm = __big(1)
+    }
+    // estimate k = ceil(log10(v))
+    var bl = 0
+    var t = f
+    while t > 0 {
+        t = t >> 1
+        bl += 1
+    }
+    let est = ((__cast<Int, Float>(e + bl - 1)) * 0.30102999566398114 - 1e-10).ceil().truncate_to_int()
+    var k = est
+    if est >= 0 {
+        s = __big_mul_pow10(s, est)
+    } else {
+        r = __big_mul_pow10(r, -est)
+        mp = __big_mul_pow10(mp, -est)
+        mm = __big_mul_pow10(mm, -est)
+    }
+    let hi = __big_cmp(__big_add(r, mp), s)
+    if hi > 0 || (even && hi == 0) {
+        k += 1
+    } else {
+        r = __big_mul_small(r, 10)
+        mp = __big_mul_small(mp, 10)
+        mm = __big_mul_small(mm, 10)
+    }
+    let digits: List<Int> = []
+    loop {
+        var d = 0
+        while __big_cmp(r, s) >= 0 {
+            r = __big_sub(r, s)
+            d += 1
+        }
+        let lo = __big_cmp(r, mm)
+        let tc1 = lo < 0 || (even && lo == 0)
+        let h = __big_cmp(__big_add(r, mp), s)
+        let tc2 = h > 0 || (even && h == 0)
+        if !tc1 && !tc2 {
+            digits.push(d)
+            r = __big_mul_small(r, 10)
+            mp = __big_mul_small(mp, 10)
+            mm = __big_mul_small(mm, 10)
+            continue
+        }
+        if tc1 && !tc2 {
+            digits.push(d)
+        } else if !tc1 && tc2 {
+            digits.push(d + 1)
+        } else if __big_cmp(__big_shl(r, 1), s) < 0 {
+            digits.push(d)
+        } else {
+            digits.push(d + 1)
+        }
+        break
+    }
+    (digits, k)
+}
+
+/// Lays out digits like JavaScript's Number.prototype.toString, without the `+` in exponents.
+fn __layout(neg: Bool, digits: List<Int>, n: Int) -> Str {
+    let b = StrBuilder.new()
+    if neg { b.push_byte(45) }
+    let k = digits.len()
+    if k <= n && n <= 21 {
+        for d in digits { b.push_byte(48 + d) }
+        for _ in 0..(n - k) { b.push_byte(48) }
+        b.push(".0")
+    } else if 0 < n && n <= 21 {
+        for i in 0..k {
+            if i == n { b.push_byte(46) }
+            b.push_byte(48 + digits[i])
+        }
+    } else if -6 < n && n <= 0 {
+        b.push("0.")
+        for _ in 0..(-n) { b.push_byte(48) }
+        for d in digits { b.push_byte(48 + d) }
+    } else {
+        b.push_byte(48 + digits[0])
+        if k > 1 {
+            b.push_byte(46)
+            for i in 1..k { b.push_byte(48 + digits[i]) }
+        }
+        b.push_byte(101)
+        let ex = n - 1
+        b.push(ex.show())
+    }
+    b.to_str()
+}
+
+pub fn __soft_fmt_f64(x: Float) -> Str {
+    if x.is_nan() { return "NaN" }
+    if x == INFINITY { return "inf" }
+    if x == -INFINITY { return "-inf" }
+    let bits = __reinterpret<Float, I64>(x)
+    let neg = bits < 0
+    if x == 0.0 { return if neg { "-0.0" } else { "0.0" } }
+    let be = __cast<I64, Int>((bits >> 52) & 0x7FF)
+    let frac = bits & 0xFFFFFFFFFFFFF
+    let (f, e) = if be == 0 { (frac, -1074) } else { (frac | (__cast<Int, I64>(1) << 52), be - 1075) }
+    let (ds, k) = __shortest(f, e, 53, -1074)
+    __layout(neg, ds, k)
+}
+
+pub fn __soft_fmt_f32(x: F32) -> Str {
+    if x.is_nan() { return "NaN" }
+    let bits = __cast<U32, I64>(x.to_bits())
+    let neg = (bits >> 31) == 1
+    let be = __cast<I64, Int>((bits >> 23) & 0xFF)
+    if be == 255 { return if neg { "-inf" } else { "inf" } }
+    let frac = bits & 0x7FFFFF
+    if be == 0 && frac == 0 { return if neg { "-0.0" } else { "0.0" } }
+    let (f, e) = if be == 0 { (frac, -149) } else { (frac | 0x800000, be - 150) }
+    let (ds, k) = __shortest(f, e, 24, -149)
+    __layout(neg, ds, k)
+}
+
+// ---- correctly rounded parsing
+
+/// Rounds num/den to a float with precision `p` and minimum normal exponent `emin`, returning
+/// the IEEE bit pattern (exponent bias `bias`, `ebits` exponent bits), sign not included.
+fn __round_ratio(num: List<I64>, den: List<I64>, p: Int, emin: Int, emax: Int) -> I64 {
+    if __big_is_zero(num) { return 0 }
+    // scale so den <= n < 2 den; the value is then n/den * 2^e2
+    var n = num
+    var d = den
+    var e2 = __big_bitlen(num) - __big_bitlen(den)
+    if e2 >= 0 { d = __big_shl(d, e2) } else { n = __big_shl(n, -e2) }
+    if __big_cmp(n, d) < 0 {
+        n = __big_shl(n, 1)
+        e2 -= 1
+    }
+    let ebits_max = emax + 1
+    if e2 > emax { return __cast<Int, I64>(ebits_max + emax) << (p - 1) }
+    // number of mantissa bits available at this exponent
+    var keep = p
+    if e2 < emin { keep = p - (emin - e2) }
+    if keep < 0 { return 0 }
+    var m: I64 = 0
+    for _ in 0..keep {
+        m = m << 1
+        if __big_cmp(n, d) >= 0 {
+            n = __big_sub(n, d)
+            m += 1
+        }
+        n = __big_shl(n, 1)
+    }
+    // next bit and sticky
+    let c = __big_cmp(n, d)
+    let half = c >= 0
+    if half { n = __big_sub(n, d) }
+    let sticky = !__big_is_zero(n)
+    if half && (sticky || (m & 1) == 1) { m += 1 }
+    // value = m * 2^(e2 - keep + 1)
+    var exp = e2
+    if keep == p && m == (__cast<Int, I64>(1) << p) {
+        m = m >> 1
+        exp += 1
+    }
+    if keep < p {
+        // subnormal (possibly rounded up into the smallest normal)
+        return m
+    }
+    if exp > emax { return __cast<Int, I64>(ebits_max + emax) << (p - 1) }
+    let biased = __cast<Int, I64>(exp + emax)
+    (biased << (p - 1)) | (m & ((__cast<Int, I64>(1) << (p - 1)) - 1))
+}
+
+/// Parses a decimal floating-point literal; None if malformed.
+fn __soft_parse(s: Str, p: Int, emin: Int, emax: Int) -> Option<(Bool, I64)> {
+    let t = s.trim()
+    let n = __str_len(t)
+    var i = 0
+    var neg = false
+    if i < n && (__str_byte(t, i) == 43 || __str_byte(t, i) == 45) {
+        neg = __str_byte(t, i) == 45
+        i += 1
+    }
+    let rest = __str_slice(t, i, n).to_lower()
+    if rest == "inf" || rest == "infinity" { return Some((neg, __cast<Int, I64>(2 * emax + 1) << (p - 1))) }
+    var mant = __big(0)
+    var digits = 0
+    var exp10 = 0
+    var seen_digit = false
+    var sig = 0
+    while i < n && __str_byte(t, i) >= 48 && __str_byte(t, i) <= 57 {
+        seen_digit = true
+        let dv = __cast<Int, I64>(__str_byte(t, i) - 48)
+        if sig < 800 {
+            mant = __big_add(__big_mul_small(mant, 10), __big(dv))
+            if !__big_is_zero(mant) { sig += 1 }
+        } else {
+            exp10 += 1
+        }
+        digits += 1
+        i += 1
+    }
+    if i < n && __str_byte(t, i) == 46 {
+        i += 1
+        while i < n && __str_byte(t, i) >= 48 && __str_byte(t, i) <= 57 {
+            seen_digit = true
+            let dv = __cast<Int, I64>(__str_byte(t, i) - 48)
+            if sig < 800 {
+                mant = __big_add(__big_mul_small(mant, 10), __big(dv))
+                if !__big_is_zero(mant) { sig += 1 }
+                exp10 -= 1
+            }
+            i += 1
+        }
+    }
+    if !seen_digit { return None }
+    if i < n && (__str_byte(t, i) == 101 || __str_byte(t, i) == 69) {
+        i += 1
+        var eneg = false
+        if i < n && (__str_byte(t, i) == 43 || __str_byte(t, i) == 45) {
+            eneg = __str_byte(t, i) == 45
+            i += 1
+        }
+        var ev = 0
+        var any = false
+        while i < n && __str_byte(t, i) >= 48 && __str_byte(t, i) <= 57 {
+            if ev < 100000 { ev = ev * 10 + (__str_byte(t, i) - 48) }
+            any = true
+            i += 1
+        }
+        if !any { return None }
+        exp10 += if eneg { -ev } else { ev }
+    }
+    if i != n { return None }
+    if __big_is_zero(mant) { return Some((neg, 0)) }
+    // quick range checks keep the big numbers small
+    if exp10 + sig > 400 { return Some((neg, __cast<Int, I64>(2 * emax + 1) << (p - 1))) }
+    if exp10 + sig < -400 { return Some((neg, 0)) }
+    let bits = if exp10 >= 0 {
+        __round_ratio(__big_mul_pow10(mant, exp10), __big(1), p, emin, emax)
+    } else {
+        __round_ratio(mant, __big_mul_pow10(__big(1), -exp10), p, emin, emax)
+    }
+    Some((neg, bits))
+}
+
+pub fn __soft_parse_f64(s: Str) -> Float {
+    match __soft_parse(s, 53, -1022, 1023) {
+        Some((neg, bits)) -> {
+            let b = if neg { bits | __cast<Int, I64>(1) << 63 } else { bits }
+            __reinterpret<I64, Float>(b)
+        }
+        None -> NAN
+    }
+}
+
+// ---- elementary functions (after fdlibm / musl)
+
+fn __hi(x: Float) -> Int { __cast<I64, Int>(__reinterpret<Float, I64>(x) >> 32) }
+fn __lo(x: Float) -> I64 { __reinterpret<Float, I64>(x) & 0xFFFFFFFF }
+fn __from_words(hi: Int, lo: I64) -> Float { __reinterpret<I64, Float>((__cast<Int, I64>(hi) << 32) | lo) }
+fn __scalbn(x: Float, n: Int) -> Float {
+    var y = x
+    var k = n
+    while k > 1023 {
+        y = y * 8.98846567431158e307
+        k -= 1023
+    }
+    while k < -1022 {
+        y = y * 2.2250738585072014e-308
+        k += 1022
+    }
+    y * __reinterpret<I64, Float>(__cast<Int, I64>(k + 1023) << 52)
+}
+
+pub fn __soft_exp(x: Float) -> Float {
+    if x.is_nan() { return x }
+    if x > 709.782712893384 { return INFINITY }
+    if x < -745.1332191019411 { return 0.0 }
+    let ln2hi = 6.93147180369123816490e-01
+    let ln2lo = 1.90821492927058770002e-10
+    let invln2 = 1.44269504088896338700e+00
+    let k = if x.abs() < 0.34657359027997264 { 0 } else { (invln2 * x + (if x < 0.0 { -0.5 } else { 0.5 })).trunc().truncate_to_int() }
+    let hi = x - __cast<Int, Float>(k) * ln2hi
+    let lo = __cast<Int, Float>(k) * ln2lo
+    let r = hi - lo
+    let z = r * r
+    let c = r - z * (1.66666666666666019037e-01 + z * (-2.77777777770155933842e-03 + z * (6.61375632143793436117e-05 + z * (-1.65339022054652515390e-06 + z * 4.13813679705723846039e-08))))
+    let y = 1.0 - ((lo - (r * c) / (2.0 - c)) - hi)
+    if k == 0 { y } else { __scalbn(y, k) }
+}
+
+pub fn __soft_ln(x: Float) -> Float {
+    if x.is_nan() || x < 0.0 { return NAN }
+    if x == 0.0 { return -INFINITY }
+    if x == INFINITY { return x }
+    var v = x
+    var k = 0
+    if v < 2.2250738585072014e-308 {
+        v = v * 18014398509481984.0
+        k -= 54
+    }
+    var hx = __hi(v)
+    k += (hx >> 20) - 1023
+    hx = hx & 0x000fffff
+    let i = (hx + 0x95f64) & 0x100000
+    v = __from_words(hx | (i ^ 0x3ff00000), __lo(v))
+    k += i >> 20
+    let f = v - 1.0
+    let hfsq = 0.5 * f * f
+    let s = f / (2.0 + f)
+    let z = s * s
+    let w = z * z
+    let t1 = w * (3.999999999940941908e-01 + w * (2.222219843214978396e-01 + w * 1.531383769920937332e-01))
+    let t2 = z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
+    let r = t2 + t1
+    let dk = __cast<Int, Float>(k)
+    s * (hfsq + r) + dk * 1.90821492927058770002e-10 - hfsq + f + dk * 6.93147180369123816490e-01
+}
+
+pub fn __soft_log2(x: Float) -> Float { __soft_ln(x) * 1.4426950408889634 }
+pub fn __soft_log10(x: Float) -> Float { __soft_ln(x) * 0.4342944819032518 }
+
+pub fn __soft_pow(x: Float, y: Float) -> Float {
+    if y == 0.0 { return 1.0 }
+    if x == 1.0 { return 1.0 }
+    if x.is_nan() || y.is_nan() { return NAN }
+    let yi = y.trunc() == y
+    if yi && y.abs() <= 1024.0 {
+        var n = y.abs().truncate_to_int()
+        var base = x
+        var acc = 1.0
+        while n > 0 {
+            if (n & 1) == 1 { acc = acc * base }
+            base = base * base
+            n = n >> 1
+        }
+        return if y < 0.0 { 1.0 / acc } else { acc }
+    }
+    if x == 0.0 { return if y < 0.0 { INFINITY } else { 0.0 } }
+    if x < 0.0 {
+        if !yi { return NAN }
+        let r = __soft_exp(y * __soft_ln(-x))
+        let odd = (y / 2.0).trunc() * 2.0 != y
+        return if odd { -r } else { r }
+    }
+    if x == INFINITY { return if y < 0.0 { 0.0 } else { INFINITY } }
+    __soft_exp(y * __soft_ln(x))
+}
+
+fn __k_sin(x: Float, y: Float) -> Float {
+    let z = x * x
+    let w = z * z
+    let r = 8.33333333332248946124e-03 + z * (-1.98412698298579493134e-04 + z * 2.75573137070700676789e-06) + z * w * (-2.50507602534068634195e-08 + z * 1.58969099521155010221e-10)
+    let v = z * x
+    x - ((z * (0.5 * y - v * r) - y) - v * -1.66666666666666324348e-01)
+}
+
+fn __k_cos(x: Float, y: Float) -> Float {
+    let z = x * x
+    let w = z * z
+    let r = z * (4.16666666666666019037e-02 + z * (-1.38888888888741095749e-03 + z * 2.48015872894767294178e-05)) + w * w * (-2.75573143513906633035e-07 + z * (2.08757232129817482790e-09 + z * -1.13596475577881948265e-11))
+    let hz = 0.5 * z
+    let w2 = 1.0 - hz
+    w2 + (((1.0 - w2) - hz) + (z * r - x * y))
+}
+
+/// x = n * pi/2 + (y0 + y1) with |y0 + y1| <= pi/4.
+fn __rem_pio2(x: Float) -> (Int, Float, Float) {
+    let n = (x * 6.36619772367581382433e-01).round_even()
+    let r = x - n * 1.57079632673412561417e+00
+    let w = n * 6.07710050650619224932e-11
+    let y0 = r - w
+    let y1 = (r - y0) - w
+    // second iteration for more precision
+    let t = r
+    let w2 = n * 6.07710050630396597660e-11
+    let r2 = t - w2
+    let w3 = n * 2.02226624879595063154e-21 - ((t - r2) - w2)
+    let z0 = r2 - w3
+    let z1 = (r2 - z0) - w3
+    let _ = y0
+    let _ = y1
+    (n.truncate_to_int(), z0, z1)
+}
+
+pub fn __soft_sin(x: Float) -> Float {
+    if !x.is_finite() { return NAN }
+    if x.abs() < 0.7853981633974483 { return __k_sin(x, 0.0) }
+    let (n, a, b) = __rem_pio2(x)
+    match n & 3 {
+        0 -> __k_sin(a, b)
+        1 -> __k_cos(a, b)
+        2 -> -__k_sin(a, b)
+        _ -> -__k_cos(a, b)
+    }
+}
+
+pub fn __soft_cos(x: Float) -> Float {
+    if !x.is_finite() { return NAN }
+    if x.abs() < 0.7853981633974483 { return __k_cos(x, 0.0) }
+    let (n, a, b) = __rem_pio2(x)
+    match n & 3 {
+        0 -> __k_cos(a, b)
+        1 -> -__k_sin(a, b)
+        2 -> -__k_cos(a, b)
+        _ -> __k_sin(a, b)
+    }
+}
+
+pub fn __soft_tan(x: Float) -> Float { __soft_sin(x) / __soft_cos(x) }
+
+pub fn __soft_atan(x: Float) -> Float {
+    if x.is_nan() { return x }
+    let atanhi = [4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00]
+    let atanlo = [2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17]
+    let neg = x < 0.0
+    var v = x.abs()
+    var id = -1
+    if v >= 4.4028204143e+17 {
+        let r = 1.5707963267948966
+        return if neg { -r } else { r }
+    }
+    if v < 0.4375 {
+        if v < 7.450580596923828e-09 { return x }
+    } else if v < 1.1875 {
+        if v < 0.6875 {
+            id = 0
+            v = (2.0 * v - 1.0) / (2.0 + v)
+        } else {
+            id = 1
+            v = (v - 1.0) / (v + 1.0)
+        }
+    } else if v < 2.4375 {
+        id = 2
+        v = (v - 1.5) / (1.0 + 1.5 * v)
+    } else {
+        id = 3
+        v = -1.0 / v
+    }
+    let z = v * v
+    let w = z * z
+    let s1 = z * (3.33333333333329318027e-01 + w * (1.42857142725034663711e-01 + w * (9.09088713343650656196e-02 + w * (6.66107313738753120669e-02 + w * (4.97687799461593236017e-02 + w * 1.62858201153657823623e-02)))))
+    let s2 = w * (-1.99999999998764832476e-01 + w * (-1.11111104054623557880e-01 + w * (-7.69187620504482999495e-02 + w * (-5.83357013379057348645e-02 + w * -3.65315727442169155270e-02))))
+    if id < 0 { return x - x * (s1 + s2) }
+    let r = atanhi[id] - ((v * (s1 + s2) - atanlo[id]) - v)
+    if neg { -r } else { r }
+}
+
+pub fn __soft_atan2(y: Float, x: Float) -> Float {
+    let pi = 3.141592653589793
+    if x.is_nan() || y.is_nan() { return NAN }
+    if x == 0.0 {
+        if y == 0.0 { return if __reinterpret<Float, I64>(x) < 0 { if __reinterpret<Float, I64>(y) < 0 { -pi } else { pi } } else { y } }
+        return if y > 0.0 { pi / 2.0 } else { -pi / 2.0 }
+    }
+    if x == INFINITY && y.is_infinite() { return if y > 0.0 { pi / 4.0 } else { -pi / 4.0 } }
+    if x == -INFINITY && y.is_infinite() { return if y > 0.0 { 3.0 * pi / 4.0 } else { -3.0 * pi / 4.0 } }
+    let a = __soft_atan(y / x)
+    if x > 0.0 { a } else if y >= 0.0 && __reinterpret<Float, I64>(y) >= 0 { a + pi } else { a - pi }
+}
+
+pub fn __soft_asin(x: Float) -> Float {
+    if x.abs() > 1.0 { return NAN }
+    __soft_atan2(x, ((1.0 - x) * (1.0 + x)).sqrt())
+}
+
+pub fn __soft_acos(x: Float) -> Float {
+    if x.abs() > 1.0 { return NAN }
+    __soft_atan2(((1.0 - x) * (1.0 + x)).sqrt(), x)
+}
+
+pub fn __soft_cbrt(x: Float) -> Float {
+    if x == 0.0 || !x.is_finite() { return x }
+    let neg = x < 0.0
+    let a = x.abs()
+    var y = __soft_exp(__soft_ln(a) / 3.0)
+    // two Newton steps
+    y = y - (y * y * y - a) / (3.0 * y * y)
+    y = y - (y * y * y - a) / (3.0 * y * y)
+    let r = y.round()
+    let res = if r * r * r == a { r } else { y }
+    if neg { -res } else { res }
+}
+
+pub fn __soft_hypot(x: Float, y: Float) -> Float {
+    let a = x.abs()
+    let b = y.abs()
+    if a.is_infinite() || b.is_infinite() { return INFINITY }
+    if a.is_nan() || b.is_nan() { return NAN }
+    let m = if a > b { a } else { b }
+    if m == 0.0 { return 0.0 }
+    let p = a / m
+    let q = b / m
+    m * (p * p + q * q).sqrt()
+}
