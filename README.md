@@ -47,13 +47,13 @@ Running needs Node.js 22 or newer, since it uses WebAssembly GC. The generated `
 
 The compiler implements most of the draft 0.1 language.
 
-- **Language:** structs, enums, tuples, generics with bounds (monomorphized), traits with default methods, associated types and supertraits, `dyn Trait`, operator traits, closures that capture by reference, pattern matching with exhaustiveness checking (guards, ranges, or-patterns, list patterns, `let ... else`, `if let`, `while let`), `?` with `From` conversion, `AnyErr` with `downcast`, `@derive(Eq, Ord, Hash, Show, Transfer)`, constants, type aliases, implicit numeric widening, checked integer overflow, modules and imports, `test` blocks, `@target`, `@extern`, `@export`/`export fn` and `@deprecated`.
+- **Language:** structs, enums, tuples, generics with bounds (monomorphized), traits with default methods, associated types and supertraits, `dyn Trait`, operator traits, closures that capture by reference, pattern matching with exhaustiveness checking (guards, ranges, or-patterns, list patterns, `let ... else`, `if let`, `while let`), `?` with `From` conversion, `AnyErr` with `downcast`, `@derive(Eq, Ord, Hash, Show, Transfer)`, constants, type aliases, `async fn`/`.await`/`task.scope`, implicit numeric widening, checked integer overflow, modules and imports, `test` blocks, `@target`, `@extern`, `@export`/`export fn` and `@deprecated`.
 - **Standard library:** the prelude (`Option`, `Result`, `List`, `Map`, `Set` and their views, `Str`, `Char`, `StrBuilder`, iterators and numeric methods) plus `std.math`, `std.log`, `std.time`, `std.random`, `std.io`, `std.fs`, `std.env` and `std.json`, each available on the targets listed in SPEC §10.2. The prelude is written in Puddi ([src/prelude.pud](src/prelude.pud), [std/](std)).
 - **Output:** a single WasmGC core module, plus JS glue for Node.js and browsers. Structs and enums map to GC structs, generics are monomorphized, and closures and trait objects are GC structs that hold function references.
 
 Not yet implemented:
 
-- `async`/`.await`, `task.scope`, cancellation and workers (SPEC §9)
+- workers (`std.worker`). Async code runs on a sequential scheduler: futures are lazy and run when awaited, and children of a `task.scope` that were never awaited run when the scope ends. Since no standard module suspends yet, cancellation is never triggered and `task.is_cancelled()` is always false
 - Component Model output, WIT imports and WASI 0.3 worlds. Targets currently produce core modules with a small host import interface, and `plugin` exports go through `@export`
 - package dependencies, `pud.lock` and `pud add`
 - `std.http`, `std.worker` and `std.dom`

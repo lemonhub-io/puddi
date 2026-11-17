@@ -272,6 +272,13 @@ impl Program {
         }
     }
 
+    pub fn future_ty(&self, t: Ty) -> Ty {
+        match self.known.get("Future") {
+            Some(Def::Adt(id)) => Ty::Adt(*id, vec![t]),
+            _ => t,
+        }
+    }
+
     pub fn option_ty(&self, t: Ty) -> Ty {
         Ty::Adt(self.known_adt("Option"), vec![t])
     }
@@ -337,14 +344,15 @@ impl Program {
                 Ok(Ty::Tuple(ts.iter().map(|t| self.resolve_ty(cx, t)).collect::<Result<_, _>>()?))
             }
             TypeExpr::Fn { is_async, params, ret, span } => {
-                if *is_async {
-                    return Err(Diag::new(*span, "async function types are not supported by this compiler yet"));
-                }
+                let _ = span;
                 let ps = params.iter().map(|t| self.resolve_ty(cx, t)).collect::<Result<_, _>>()?;
-                let r = match ret {
+                let mut r = match ret {
                     Some(r) => self.resolve_ty(cx, r)?,
                     None => Ty::Unit,
                 };
+                if *is_async {
+                    r = self.future_ty(r);
+                }
                 Ok(Ty::Fn(ps, Box::new(r)))
             }
             TypeExpr::SelfTy(span) => cx.self_ty.clone().ok_or_else(|| Diag::new(*span, "`Self` is only available inside traits and impls")),
@@ -840,7 +848,7 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
     }
     for name in [
         "Option", "Result", "List", "Map", "Set", "Ordering", "Range", "ListView", "MapView", "SetView", "AnyErr", "StrIndex", "Show", "Eq", "Ord", "Hash", "From",
-        "Error", "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Not", "Index", "Transfer", "Iterator",
+        "Error", "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Not", "Index", "Transfer", "Iterator", "Future",
     ] {
         if let Some((d, _)) = p.modules[p.prelude].items.get(name).cloned() {
             p.known.insert(name, d);
@@ -1277,9 +1285,6 @@ fn placeholder_fn(fd: &ast::FnDecl, module: ModId, pkg: Pkg) -> FnDef {
 
 #[allow(clippy::too_many_arguments)]
 fn resolve_fn(p: &Program, fd: &ast::FnDecl, module: ModId, outer: &[GenericDef], self_ty: Option<Ty>, owner: FnOwner, is_pub: bool, pkg: Pkg) -> Result<FnDef, Diag> {
-    if fd.is_async {
-        return Err(Diag::new(fd.span, "`async fn` is not supported by this compiler yet").note("async/await, task scopes and workers are planned; see the README for implementation status"));
-    }
     let mut names: Vec<String> = outer.iter().map(|g| g.name.clone()).collect();
     for g in &fd.generics {
         if names.contains(&g.name.name) {
@@ -1306,10 +1311,13 @@ fn resolve_fn(p: &Program, fd: &ast::FnDecl, module: ModId, outer: &[GenericDef]
     for prm in &fd.params {
         params.push((prm.name.name.clone(), p.resolve_ty(&cx, &prm.ty)?));
     }
-    let ret = match &fd.ret {
+    let mut ret = match &fd.ret {
         Some(t) => p.resolve_ty(&cx, t)?,
         None => Ty::Unit,
     };
+    if fd.is_async {
+        ret = p.future_ty(ret);
+    }
     let mut intrinsic = None;
     let mut extern_ = None;
     let mut export = None;

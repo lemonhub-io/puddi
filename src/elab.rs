@@ -96,6 +96,7 @@ struct LoopCx {
 }
 
 struct FnCx {
+    is_async: bool,
     locals: Vec<LocalInfo>,
     scopes: Vec<Vec<(String, LocalId)>>,
     captures: Vec<(LocalId, LocalId)>,
@@ -105,7 +106,7 @@ struct FnCx {
 
 impl FnCx {
     fn new(ret: Ty) -> FnCx {
-        FnCx { locals: Vec::new(), scopes: vec![Vec::new()], captures: Vec::new(), ret, loops: Vec::new() }
+        FnCx { is_async: false, locals: Vec::new(), scopes: vec![Vec::new()], captures: Vec::new(), ret, loops: Vec::new() }
     }
 }
 
@@ -151,10 +152,22 @@ fn elaborate_fn(g: &mut Global, inst: &FnInst) -> ir::Func {
     }
     el.cxs.push(cx);
     let name = fn_display_name(prog, inst);
+    if f.test_name.is_some() {
+        el.cxs[0].is_async = true;
+    }
     let body = if let Some(b) = &f.decl.body {
         let b = b.clone();
-        let e = el.block(&b, Some(&ret));
-        el.coerce(e, &ret)
+        if f.decl.is_async {
+            let inner = match &ret {
+                Ty::Adt(_, a) if a.len() == 1 => a[0].clone(),
+                _ => Ty::Error,
+            };
+            let bexpr = ae(ast::ExprKind::Block(b.clone()), b.span);
+            el.future_of(&bexpr, Some(inner), b.span)
+        } else {
+            let e = el.block(&b, Some(&ret));
+            el.coerce(e, &ret)
+        }
     } else {
         Expr { kind: ExprKind::Unreachable, ty: Ty::Never, span: f.span }
     };
@@ -799,9 +812,26 @@ impl<'g, 'p> Elab<'g, 'p> {
                 self.method_call(b, "index", &[], vec![(**idx).clone()], span, expect)
             }
             ast::ExprKind::Try(inner) => self.try_expr(inner, span),
-            ast::ExprKind::Await(_) => {
-                self.err(span, "`.await` is not supported by this compiler yet");
-                mk(ExprKind::Unreachable, Ty::Error, span)
+            ast::ExprKind::Await(inner) => {
+                if !self.cxs.last().unwrap().is_async {
+                    self.err(span, "`.await` is only allowed inside `async` functions, `async` closures and tests");
+                }
+                let e = self.expr(inner, None);
+                let t = self.resolve(&e.ty);
+                let ok = match &t {
+                    Ty::Adt(id, _) => {
+                        let n = self.prog.adts[*id].name.as_str();
+                        self.prog.adts[*id].pkg == Pkg::Prelude && (n == "Future" || n == "Task")
+                    }
+                    Ty::Error => true,
+                    _ => false,
+                };
+                if !ok {
+                    let s = self.tys(&t);
+                    self.err(span, format!("`.await` needs a future, found `{s}`"));
+                    return mk(ExprKind::Unreachable, Ty::Error, span);
+                }
+                self.method_call(e, "__await", &[], Vec::new(), span, expect)
             }
             ast::ExprKind::Unary(op, inner) => self.unary(*op, inner, span, expect),
             ast::ExprKind::Binary(op, l, r) => self.binary(*op, l, r, span, expect),
@@ -862,9 +892,10 @@ impl<'g, 'p> Elab<'g, 'p> {
             ast::ExprKind::For(pat, iter, body) => self.for_expr(pat, iter, body, span),
             ast::ExprKind::Closure { is_async, params, ret, body } => {
                 if *is_async {
-                    self.err(span, "async closures are not supported by this compiler yet");
+                    self.async_closure(params, ret.as_ref(), body, span, expect)
+                } else {
+                    self.closure(params, ret.as_ref(), body, span, expect)
                 }
-                self.closure(params, ret.as_ref(), body, span, expect)
             }
             ast::ExprKind::Return(v) => {
                 let ret = self.cx().ret.clone();
@@ -2220,7 +2251,53 @@ impl<'g, 'p> Elab<'g, 'p> {
         }
     }
 
+    /// Build a lazy `Future<T>` whose body runs in an async context.
+    fn future_of(&mut self, body: &ast::Expr, inner_ret: Option<Ty>, span: Span) -> Expr {
+        let rty = inner_ret.unwrap_or_else(|| self.fresh());
+        let idx = self.g.reserve();
+        let mut cx = FnCx::new(rty.clone());
+        cx.is_async = true;
+        self.cxs.push(cx);
+        let mut b = self.expr(body, Some(&rty));
+        if matches!(self.resolve(&rty), Ty::Unit) && !matches!(self.resolve(&b.ty), Ty::Unit | Ty::Never) {
+            let sp = b.span;
+            b = mk(ExprKind::Discard(Box::new(b)), Ty::Unit, sp);
+        }
+        let b = self.coerce(b, &rty);
+        let cx = self.cxs.pop().unwrap();
+        let captures: Vec<LocalId> = cx.captures.iter().map(|(p, _)| *p).collect();
+        let func = ir::Func { name: format!("async{idx}"), params: Vec::new(), locals: cx.locals, ret: rty.clone(), body: b, is_closure: true, export: None, extern_: None };
+        self.closures.push((idx, func));
+        let clo = mk(ExprKind::Closure { func: idx, captures }, Ty::Fn(Vec::new(), Box::new(rty.clone())), span);
+        let Some(Def::Fn(fid)) = self.prog.lookup(self.prog.prelude, "__future_new") else {
+            self.err(span, "internal error: missing `__future_new` in the prelude");
+            return mk(ExprKind::Unreachable, Ty::Error, span);
+        };
+        let fty = self.prog.future_ty(rty.clone());
+        mk(ExprKind::Call(FnInst { fn_id: fid, targs: vec![rty] }, vec![clo]), fty, span)
+    }
+
+    /// `async |p| body` is a closure returning a lazy future.
+    fn async_closure(&mut self, params: &[(ast::Pattern, Option<ast::TypeExpr>)], ret: Option<&ast::TypeExpr>, body: &ast::Expr, span: Span, expect: Option<&Ty>) -> Expr {
+        let inner_ret = match ret {
+            Some(r) => Some(self.resolve_ty(r)),
+            None => match expect.map(|t| self.resolve(t)) {
+                Some(Ty::Fn(_, r)) => match self.resolve(&r) {
+                    Ty::Adt(_, a) if a.len() == 1 => Some(a[0].clone()),
+                    _ => None,
+                },
+                _ => None,
+            },
+        };
+        let inner_ret = inner_ret.unwrap_or_else(|| self.fresh());
+        self.closure_impl(params, None, body, span, expect, Some(inner_ret))
+    }
+
     fn closure(&mut self, params: &[(ast::Pattern, Option<ast::TypeExpr>)], ret: Option<&ast::TypeExpr>, body: &ast::Expr, span: Span, expect: Option<&Ty>) -> Expr {
+        self.closure_impl(params, ret, body, span, expect, None)
+    }
+
+    fn closure_impl(&mut self, params: &[(ast::Pattern, Option<ast::TypeExpr>)], ret: Option<&ast::TypeExpr>, body: &ast::Expr, span: Span, expect: Option<&Ty>, async_inner: Option<Ty>) -> Expr {
         let (exp_ps, exp_r) = match expect.map(|t| self.resolve(t)) {
             Some(Ty::Fn(ps, r)) if ps.len() == params.len() => (Some(ps), Some(*r)),
             _ => (None, None),
@@ -2242,9 +2319,16 @@ impl<'g, 'p> Elab<'g, 'p> {
             };
             ptys.push(t);
         }
-        let rty = match ret {
-            Some(r) => self.resolve_ty(r),
-            None => exp_r.unwrap_or_else(|| self.fresh()),
+        let rty = match (&async_inner, ret) {
+            (Some(i), _) => {
+                let f = self.prog.future_ty(i.clone());
+                if let Some(r) = &exp_r {
+                    self.unify(&f, r);
+                }
+                f
+            }
+            (None, Some(r)) => self.resolve_ty(r),
+            (None, None) => exp_r.unwrap_or_else(|| self.fresh()),
         };
         let idx = self.g.reserve();
         self.cxs.push(FnCx::new(rty.clone()));
@@ -2277,7 +2361,10 @@ impl<'g, 'p> Elab<'g, 'p> {
             }
             stmts.push(Stmt::Let(pat, self.local_expr(l, p.span)));
         }
-        let mut b = self.expr(body, Some(&rty));
+        let mut b = match &async_inner {
+            Some(i) => self.future_of(body, Some(i.clone()), span),
+            None => self.expr(body, Some(&rty)),
+        };
         if matches!(self.resolve(&rty), Ty::Unit) && !matches!(self.resolve(&b.ty), Ty::Unit | Ty::Never) {
             let sp = b.span;
             b = mk(ExprKind::Discard(Box::new(b)), Ty::Unit, sp);

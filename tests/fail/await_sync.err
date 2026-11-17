@@ -1,0 +1,2 @@
+`.await` is only allowed inside `async` functions, `async` closures and tests
+mismatched types: expected `Int`, found `Future<Int>`

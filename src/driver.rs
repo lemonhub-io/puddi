@@ -103,12 +103,13 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
                     });
                     if let Some(fd) = main {
                         has_main = true;
+                        let call = if fd.is_async { "main().__await()" } else { "main()" };
+                        let unit_entry = format!("fn __entry() -> Int {{\n    {call}\n    0\n}}\n");
+                        let result_entry = format!("fn __entry() -> Int {{\n    match {call} {{\n        Ok(_) -> 0\n        Err(e) -> {{\n            eprint(\"error: {{e}}\")\n            1\n        }}\n    }}\n}}\n");
                         let entry = match &fd.ret {
-                            None => Some("fn __entry() -> Int {\n    main()\n    0\n}\n"),
-                            Some(ast::TypeExpr::Tuple(ts, _)) if ts.is_empty() => Some("fn __entry() -> Int {\n    main()\n    0\n}\n"),
-                            Some(ast::TypeExpr::Path { segs, .. }) if segs.last().map(|s| s.name == "Result").unwrap_or(false) => Some(
-                                "fn __entry() -> Int {\n    match main() {\n        Ok(_) -> 0\n        Err(e) -> {\n            eprint(\"error: {e}\")\n            1\n        }\n    }\n}\n",
-                            ),
+                            None => Some(unit_entry),
+                            Some(ast::TypeExpr::Tuple(ts, _)) if ts.is_empty() => Some(unit_entry),
+                            Some(ast::TypeExpr::Path { segs, .. }) if segs.last().map(|s| s.name == "Result").unwrap_or(false) => Some(result_entry),
                             Some(t) => {
                                 errs.push(Diag::new(t.span(), "`main` must return `()` or `Result<(), E>`"));
                                 None
@@ -118,7 +119,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
                             errs.push(Diag::new(fd.name.span, "`main` takes no parameters; use `std.env.args()` for command-line arguments"));
                         }
                         if let Some(src) = entry {
-                            match parse_file(sm, "<entry>".into(), src.to_string()) {
+                            match parse_file(sm, "<entry>".into(), src) {
                                 Ok(e) => m.items.extend(e.items),
                                 Err(e) => errs.extend(e),
                             }

@@ -1,0 +1,50 @@
+struct User { id: Int, name: Str }
+
+async fn fetch_user(id: Int) -> Result<User, Str> {
+    if id < 0 { return Err("bad id {id}") }
+    Ok(User { id, name: "user{id}" })
+}
+
+async fn load_pair() -> Result<(User, User), Str> {
+    task.scope(async |s| {
+        let a = s.spawn(fetch_user(1))
+        let b = s.spawn(fetch_user(2))
+        Ok((a.await?, b.await?))
+    }).await
+}
+
+trait Source {
+    async fn read(self) -> Str
+}
+
+struct Fixed { text: Str }
+impl Source for Fixed {
+    async fn read(self) -> Str { self.text }
+}
+
+async fn twice(f: async fn(Int) -> Int, x: Int) -> Int {
+    f(f(x).await).await
+}
+
+async fn main() {
+    match load_pair().await {
+        Ok((a, b)) -> print("{a.name} and {b.name}")
+        Err(e) -> print(e)
+    }
+    match fetch_user(-1).await {
+        Ok(_) -> print("?")
+        Err(e) -> print(e)
+    }
+    let src: dyn Source = Fixed { text: "from dyn" }
+    print(src.read().await)
+    let inc = async |x: Int| x + 1
+    print(twice(inc, 5).await)
+    let lazy = fetch_user(7)
+    print("created")
+    print(lazy.await.unwrap().id)
+    print(task.is_cancelled())
+}
+
+test "await in tests" {
+    assert_eq(fetch_user(3).await.unwrap().name, "user3")
+}

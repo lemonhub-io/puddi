@@ -2105,3 +2105,72 @@ impl<K: Transfer, V: Transfer> Transfer for Map<K, V> {}
 impl<T: Transfer> Transfer for Set<T> {}
 impl<A: Transfer, B: Transfer> Transfer for (A, B) {}
 impl<A: Transfer, B: Transfer, C: Transfer> Transfer for (A, B, C) {}
+
+// ---------------------------------------------------------------- async
+
+/// A lazy asynchronous computation; `.await` runs it to completion.
+pub struct Future<T> {
+    var run: Option<fn() -> T>
+    var value: Option<T>
+}
+
+pub fn __future_new<T>(f: fn() -> T) -> Future<T> {
+    Future { run: Some(f), value: None }
+}
+
+impl<T> Future<T> {
+    /// A future that is already complete.
+    pub fn ready(v: T) -> Future<T> { Future { run: None, value: Some(v) } }
+    pub fn __await(self) -> T {
+        match self.value {
+            Some(v) -> return v
+            None -> {}
+        }
+        let f = self.run.expect("future awaited while it is already running")
+        self.run = None
+        let v = f()
+        self.value = Some(v)
+        v
+    }
+}
+
+/// A child task started in a scope with `s.spawn(...)`.
+pub struct Task<T> {
+    fut: Future<T>
+}
+
+impl<T> Task<T> {
+    pub fn __await(self) -> T { self.fut.__await() }
+}
+
+/// A structured-concurrency scope; children cannot outlive it.
+pub struct Scope {
+    tasks: List<fn()>
+}
+
+impl Scope {
+    pub fn spawn<T>(self, f: Future<T>) -> Task<T> {
+        self.tasks.push(|| f.__await())
+        Task { fut: f }
+    }
+    fn finish(self) {
+        for t in self.tasks { t() }
+    }
+}
+
+pub struct TaskApi {}
+
+impl TaskApi {
+    /// Runs `body` with a new scope and completes when all children have completed.
+    pub fn scope<T>(self, body: fn(Scope) -> Future<T>) -> Future<T> {
+        __future_new(|| {
+            let s = Scope { tasks: [] }
+            let r = body(s).__await()
+            s.finish()
+            r
+        })
+    }
+    pub fn is_cancelled(self) -> Bool { false }
+}
+
+pub const task: TaskApi = TaskApi {}
