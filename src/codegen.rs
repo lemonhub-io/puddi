@@ -1381,6 +1381,14 @@ impl<'a> Cg<'a> {
                 self.gen_expr(st, &args[1]);
                 st.emit("call $rt_from_mem_at");
             }
+            "worker_dispatch" => {
+                self.gen_expr(st, &args[0]);
+                if self.g.worker_entries.is_empty() {
+                    st.emit("drop unreachable");
+                } else {
+                    st.emit("call $__worker_entry i32.const 0");
+                }
+            }
             "host_async" => {
                 for a in args {
                     self.gen_expr(st, a);
@@ -1738,7 +1746,7 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         cg.exports.push(format!("(export \"main\" (func {n}))"));
     }
     if !g.worker_entries.is_empty() {
-        let mut w = String::from("(func $__worker_entry (export \"__worker_entry\") (param $k i32)\n");
+        let mut w = if cg.component { String::from("(func $__worker_entry (param $k i32)\n") } else { String::from("(func $__worker_entry (export \"__worker_entry\") (param $k i32)\n") };
         for (k, &idx) in g.worker_entries.iter().enumerate() {
             let n = cg.func_names[idx].clone();
             let _ = writeln!(w, "  local.get $k i32.const {k} i32.eq (if (then call {n} drop return))");

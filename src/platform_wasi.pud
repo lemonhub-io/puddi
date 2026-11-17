@@ -432,6 +432,11 @@ pub fn __plat_host(op: Int, arg: Str) -> Str {
             __cancel_task(arg.parse_int().unwrap())
             ""
         }
+        50 -> __plat_worker(op, arg)
+        51 -> __plat_worker(op, arg)
+        52 -> __plat_worker(op, arg)
+        53 -> __plat_worker(op, arg)
+        54 -> __plat_worker(op, arg)
         42 -> if __task_rec(__cur_task()).cancelled { "1" } else { "0" }
         43 -> {
             if __task_rec(__cur_task()).cancelled { __plat().throw_now = true }
@@ -551,6 +556,8 @@ pub fn __plat_host_async(op: Int, arg: Str) -> Str {
             ""
         }
         101 -> __res(__http(arg))
+        103 -> __plat_worker(op, arg)
+        104 -> __plat_worker(op, arg)
         _ -> __plat_host(op, arg)
     }
 }

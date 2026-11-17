@@ -59,6 +59,7 @@ pub const WASI: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     ("http", &[("types.wit", include_str!("../wit/wasi/http/types.wit")), ("worlds.wit", include_str!("../wit/wasi/http/worlds.wit"))]),
+    ("puddi-runtime", &[("runtime.wit", include_str!("../wit/puddi/runtime.wit"))]),
 ];
 
 const KEYWORDS: &[&str] = &[
@@ -137,7 +138,7 @@ impl Wit {
     }
 
     /// Select the target world and add `extra` interface imports to it.
-    pub fn load(pkg_dir: Option<&Path>, world_spec: &str, extra_names: &[String]) -> Result<Wit, String> {
+    pub fn load(pkg_dir: Option<&Path>, world_spec: &str, extra_names: &[String], extra_exports: &[String]) -> Result<Wit, String> {
         let (mut resolve, own) = Wit::new(pkg_dir)?;
         let base = Wit::select(&resolve, own, world_spec)?;
         let have: BTreeSet<InterfaceId> = resolve.worlds[base].imports.values().filter_map(|it| match it {
@@ -161,6 +162,12 @@ impl Wit {
         for &i in &extra {
             if let Some(id) = resolve.id_of(i) {
                 let _ = writeln!(text, "  import {id};");
+            }
+        }
+        for n in extra_exports {
+            let i = Wit::find_interface(&resolve, n).ok_or_else(|| format!("cannot find WIT interface `{n}`"))?;
+            if let Some(id) = resolve.id_of(i) {
+                let _ = writeln!(text, "  export {id};");
             }
         }
         text.push_str("}\n");
@@ -1197,4 +1204,208 @@ pub fn world_exports(w: &Wit) -> Vec<(String, Function, String)> {
 /// The interface key name of a world export (for messages).
 pub fn key_name(r: &Resolve, k: &WorldKey) -> String {
     r.name_world_key(k)
+}
+
+/// `name` as a WIT identifier: lowercase kebab-case fragments that start with a letter.
+/// `puddi.mjs` has the same function (`witName`).
+pub fn wit_name(name: &str) -> String {
+    let mut frags: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            cur.push(c.to_ascii_lowercase());
+        } else if !cur.is_empty() {
+            frags.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        frags.push(cur);
+    }
+    if frags.is_empty() {
+        frags.push("x".into());
+    }
+    let s: Vec<String> = frags.into_iter().map(|f| if f.starts_with(|c: char| c.is_ascii_digit()) { format!("x{f}") } else { f }).collect();
+    let mut out = s.join("-");
+    if KEYWORDS_WIT.contains(&out.as_str()) {
+        out = format!("x-{out}");
+    }
+    out
+}
+
+const KEYWORDS_WIT: &[&str] = &[
+    "use", "type", "func", "u8", "u16", "u32", "u64", "s8", "s16", "s32", "s64", "f32", "f64", "char", "resource", "record", "flags", "variant", "enum", "bool", "string", "option", "result", "future", "stream", "list", "own", "borrow", "_", "as", "from", "static", "interface", "tuple", "import", "export", "world", "package", "constructor", "include", "with", "async", "error-context", "map", "include", "implements",
+];
+
+/// Wraps a browser core module in a component.
+///
+/// Every core import becomes a world-level function import and every exported
+/// function a world export, with WIT signatures derived from the core types
+/// (only numbers cross the boundary). The renamed core module carries a
+/// `puddi:names` custom section that maps the WIT names back to the names the
+/// JavaScript glue uses, and the glue instantiates the core module directly.
+pub fn browser_component(core: &[u8]) -> Result<Vec<u8>, String> {
+    use wasmparser::{Parser, Payload, TypeRef, ValType};
+    let vt = |t: &ValType| -> Result<&'static str, String> {
+        Ok(match t {
+            ValType::I32 => "s32",
+            ValType::I64 => "s64",
+            ValType::F32 => "f32",
+            ValType::F64 => "f64",
+            _ => return Err("a browser import or export uses a reference type".into()),
+        })
+    };
+    // function types, imported function types and exports
+    let mut types: Vec<Option<wasmparser::FuncType>> = Vec::new();
+    let mut func_types: Vec<u32> = Vec::new();
+    let mut sections: Vec<(u8, std::ops::Range<usize>)> = Vec::new();
+    let mut imports: Vec<(String, String, u32)> = Vec::new();
+    let mut exports: Vec<(String, wasmparser::ExternalKind, u32)> = Vec::new();
+    for p in Parser::new(0).parse_all(core) {
+        let p = p.map_err(|e| e.to_string())?;
+        if let Some((id, range)) = p_section(&p) {
+            sections.push((id, range));
+        }
+        match p {
+            Payload::TypeSection(r) => {
+                for g in r {
+                    for st in g.map_err(|e| e.to_string())?.into_types() {
+                        types.push(match &st.composite_type.inner {
+                            wasmparser::CompositeInnerType::Func(f) => Some(f.clone()),
+                            _ => None,
+                        });
+                    }
+                }
+            }
+            Payload::ImportSection(r) => {
+                for imp in r.into_imports() {
+                    let imp = imp.map_err(|e| e.to_string())?;
+                    match imp.ty {
+                        TypeRef::Func(t) => {
+                            func_types.push(t);
+                            imports.push((imp.module.to_string(), imp.name.to_string(), t));
+                        }
+                        _ => return Err("browser modules import only functions".into()),
+                    }
+                }
+            }
+            Payload::FunctionSection(r) => {
+                for t in r {
+                    func_types.push(t.map_err(|e| e.to_string())?);
+                }
+            }
+            Payload::ExportSection(r) => {
+                for e in r {
+                    let e = e.map_err(|e| e.to_string())?;
+                    exports.push((e.name.to_string(), e.kind, e.index));
+                }
+            }
+            _ => {}
+        }
+    }
+    let sig = |t: u32| -> Result<String, String> {
+        let f = types.get(t as usize).and_then(|x| x.as_ref()).ok_or("bad function type")?;
+        let ps: Vec<String> = f.params().iter().enumerate().map(|(i, p)| Ok(format!("p{i}: {}", vt(p)?))).collect::<Result<_, String>>()?;
+        let r = match f.results() {
+            [] => String::new(),
+            [r] => format!(" -> {}", vt(r)?),
+            _ => return Err("multiple results".into()),
+        };
+        Ok(format!("func({}){r}", ps.join(", ")))
+    };
+    let mut wit = String::from("package puddi:browser-app;\n\nworld app {\n");
+    let mut names = Vec::new();
+    let mut used = BTreeSet::new();
+    let mut new_imports = wasm_encoder::ImportSection::new();
+    for (m, f, t) in &imports {
+        let n = if m == "puddi" { wit_name(f) } else { wit_name(&format!("{m}-{f}")) };
+        if !used.insert(n.clone()) {
+            return Err(format!("imports `{m}` `{f}` collide as WIT name `{n}`"));
+        }
+        let _ = writeln!(wit, "  import {n}: {};", sig(*t)?);
+        names.push(format!("[\"i\",{},{},{}]", json(&n), json(m), json(f)));
+        new_imports.import("$root", &n, wasm_encoder::EntityType::Function(*t));
+    }
+    let mut new_exports = wasm_encoder::ExportSection::new();
+    for (e, kind, idx) in &exports {
+        match kind {
+            wasmparser::ExternalKind::Func => {
+                let n = wit_name(e);
+                if !used.insert(n.clone()) {
+                    return Err(format!("export `{e}` collides as WIT name `{n}`"));
+                }
+                let _ = writeln!(wit, "  export {n}: {};", sig(func_types[*idx as usize])?);
+                names.push(format!("[\"e\",{},{}]", json(&n), json(e)));
+                new_exports.export(&n, wasm_encoder::ExportKind::Func, *idx);
+            }
+            wasmparser::ExternalKind::Memory => {
+                new_exports.export(e, wasm_encoder::ExportKind::Memory, *idx);
+            }
+            _ => return Err(format!("unsupported export `{e}`")),
+        }
+    }
+    wit.push_str("}\n");
+    // re-emit the module with the renamed import and export sections
+    let mut module = wasm_encoder::Module::new();
+    for (id, range) in &sections {
+        match id {
+            2 => {
+                module.section(&new_imports);
+            }
+            7 => {
+                module.section(&new_exports);
+            }
+            _ => {
+                module.section(&wasm_encoder::RawSection { id: *id, data: &core[range.clone()] });
+            }
+        }
+    }
+    module.section(&wasm_encoder::CustomSection { name: "puddi:names".into(), data: format!("[{}]", names.join(",")).into_bytes().into() });
+    let mut bytes = module.finish();
+    let mut resolve = Resolve::new();
+    let mut sm = wit_parser::SourceMap::new();
+    sm.push_str("<browser world>", wit);
+    let group = sm.parse().map_err(|(_, e)| format!("{e}"))?;
+    let pkg = resolve.push_group(group).map_err(|e| format!("{e}"))?;
+    let world = resolve.select_world(&[pkg], Some("app")).map_err(|e| format!("{e:#}"))?;
+    wit_component::embed_component_metadata(&mut bytes, &resolve, world, wit_component::StringEncoding::UTF8, false).map_err(|e| format!("{e:#}"))?;
+    let mut enc = wit_component::ComponentEncoder::default();
+    enc.module(&bytes).map_err(|e| format!("{e:#}"))?;
+    enc.validate(true);
+    enc.encode().map_err(|e| format!("{e:#}"))
+}
+
+/// Section id and content range of a top-level payload, for copying sections verbatim.
+fn p_section(p: &wasmparser::Payload) -> Option<(u8, std::ops::Range<usize>)> {
+    use wasmparser::Payload::*;
+    let (id, r): (u8, std::ops::Range<u64>) = match p {
+        TypeSection(r) => (1, r.range()),
+        ImportSection(r) => (2, r.range()),
+        FunctionSection(r) => (3, r.range()),
+        TableSection(r) => (4, r.range()),
+        MemorySection(r) => (5, r.range()),
+        TagSection(r) => (13, r.range()),
+        GlobalSection(r) => (6, r.range()),
+        ExportSection(r) => (7, r.range()),
+        StartSection { range, .. } => (8, range.start as u64..range.end as u64),
+        ElementSection(r) => (9, r.range()),
+        DataCountSection { range, .. } => (12, range.start as u64..range.end as u64),
+        DataSection(r) => (11, r.range()),
+        CodeSectionStart { unchecked_range, .. } => (10, unchecked_range.clone()),
+        _ => return None,
+    };
+    Some((id, r.start as usize..r.end as usize))
+}
+
+fn json(s: &str) -> String {
+    let mut o = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
 }

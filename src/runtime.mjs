@@ -244,6 +244,55 @@ export function makeImports(env, extra = {}) {
   return api;
 }
 
+/// The core module inside a component built by `pud build --target browser`,
+/// or the bytes themselves when they already are a core module.
+export function coreModuleBytes(source) {
+  const b = source instanceof Uint8Array ? source : new Uint8Array(source);
+  // component preamble: \0asm, version 0x0d, layer 1
+  if (!(b[4] === 0x0d && b[5] === 0 && b[6] === 1 && b[7] === 0)) return b;
+  let pos = 8;
+  let best = null;
+  const leb = () => {
+    let r = 0, shift = 0, x;
+    do { x = b[pos++]; r += (x & 0x7f) * 2 ** shift; shift += 7; } while (x & 0x80);
+    return r;
+  };
+  while (pos < b.length) {
+    const id = b[pos++];
+    const size = leb();
+    if (id === 1 && (!best || size > best.length)) best = b.subarray(pos, pos + size);
+    pos += size;
+  }
+  if (!best) throw new Error("the component contains no core module");
+  return best;
+}
+
+/// Compiles a Puddi module from bytes (component or core module).
+export function compile(bytes) {
+  return WebAssembly.compile(coreModuleBytes(bytes));
+}
+
+/// Instantiates a core module. Modules unpacked from a component use WIT
+/// names for imports and exports; the `puddi:names` section maps them back.
+export async function instantiate(mod, imports) {
+  const sec = WebAssembly.Module.customSections(mod, "puddi:names");
+  if (sec.length === 0) return WebAssembly.instantiate(mod, imports);
+  const names = JSON.parse(new TextDecoder().decode(sec[0]));
+  const root = {};
+  const exportNames = {};
+  for (const n of names) {
+    if (n[0] === "i") {
+      const f = imports[n[2]] && imports[n[2]][n[3]];
+      if (f === undefined) throw new Error(`missing import ${n[2]}.${n[3]}`);
+      root[n[1]] = f;
+    } else exportNames[n[1]] = n[2];
+  }
+  const instance = await WebAssembly.instantiate(mod, { $root: root });
+  const exports = {};
+  for (const [k, v] of Object.entries(instance.exports)) exports[exportNames[k] ?? k] = v;
+  return { exports };
+}
+
 export function panicMessage(e) {
   if (e instanceof PuddiPanic) return e.message;
   if (e instanceof RangeError && /call stack/i.test(e.message)) return "stack overflow";
@@ -447,8 +496,8 @@ export async function load(source, opts = {}) {
   };
   let mod;
   if (source instanceof WebAssembly.Module) mod = source;
-  else if (typeof source === "string" || source instanceof URL) mod = await WebAssembly.compileStreaming(fetch(source));
-  else mod = await WebAssembly.compile(source);
+  else if (typeof source === "string" || source instanceof URL) mod = await compile(await (await fetch(source)).arrayBuffer());
+  else mod = await compile(source);
   const ctx = {};
   if (typeof Worker !== "undefined") {
     ctx.workers = workerHost((entry, onMessage) => {
@@ -486,7 +535,7 @@ export async function load(source, opts = {}) {
   };
   api = makeImports(env, opts.imports || {});
   dom = domOps(api, fatal);
-  const instance = await WebAssembly.instantiate(mod, api.imports);
+  const instance = await instantiate(mod, api.imports);
   api.bind(instance);
   return {
     instance,
@@ -638,7 +687,7 @@ async function nodeEnv(fs, process, wasmPath, rest, ctx) {
 
 async function nodeInstantiate(mod, env) {
   const api = makeImports(env);
-  const instance = await WebAssembly.instantiate(mod, api.imports);
+  const instance = await instantiate(mod, api.imports);
   api.bind(instance);
   return { instance, api };
 }
@@ -648,7 +697,7 @@ async function nodeMain() {
   const { Worker } = await import("node:worker_threads");
   const process = globalThis.process;
   const [cmd, wasmPath, ...rest] = process.argv.slice(2);
-  const mod = await WebAssembly.compile(fs.readFileSync(wasmPath));
+  const mod = await compile(fs.readFileSync(wasmPath));
   const ctx = {};
   ctx.workers = workerHost((entry, onMessage) => {
     const w = new Worker(new URL(import.meta.url), { workerData: { puddiWorker: true, module: mod, entry, wasmPath, rest }, stdout: false, stderr: false });

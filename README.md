@@ -20,7 +20,7 @@ fn main() {
 
 ## The `pud` toolchain
 
-`pud` is written in Rust. It compiles Puddi to WasmGC. The `wasi` and `plugin` targets produce WebAssembly components; the `browser` target produces a core module with JavaScript glue.
+`pud` is written in Rust. It compiles Puddi to WasmGC and packages every target as a WebAssembly component: the `browser` component comes with JavaScript loader glue, and `wasi` components run in the embedded Wasmtime.
 
 ```sh
 cargo build --release          # builds target/release/pud (with the embedded Wasmtime runtime)
@@ -50,7 +50,11 @@ pud run some_file.pud          # single-file mode, no package needed
 
 - **wasi:** a component of the `wasi:cli/command@0.3.2` world (or `[target.wasi] world` in `pud.toml`). The runtime talks to WASI directly: stdio goes through `stream<u8>`, files through `wasi:filesystem` preopens, time and randomness through `wasi:clocks` and `wasi:random`, and `std.http` through `wasi:http/client`. `run` is lifted with the stackful async ABI and every spawned task runs on its own component-model thread, so a blocking WASI call suspends only its task. Floats are formatted and parsed in software ([src/soft.pud](src/soft.pud)) with the same shortest round-trip output as JavaScript.
 - **plugin:** a component for a host-defined world, set with `[target.plugin] world = "wit/host.wit#plugin"`. `export fn` items implement the world's exports; missing exports are compile errors. See [examples/plugin](examples/plugin).
-- **browser:** a core module plus `puddi.mjs`, with `std.dom`, `std.http` (fetch) and `std.worker` (Web Workers).
+- **browser:** a component plus `puddi.mjs`, with `std.dom`, `std.http` (fetch) and `std.worker` (Web Workers). Browsers cannot instantiate components yet, so the glue does what `jco transpile` does: it unpacks the core module from the component and instantiates it with the host functions the component's world imports.
+
+### Workers
+
+On `browser`, workers are Web Workers (worker threads under Node.js). On `wasi`, a program that imports `std.worker` imports the bundled `puddi:runtime/workers` and `puddi:runtime/port` interfaces ([wit/puddi/runtime.wit](wit/puddi/runtime.wit)) and exports `puddi:runtime/worker-main`. The embedded runner implements them by instantiating the same component again on another OS thread for each worker, so workers run in parallel with separate heaps.
 
 ### WIT imports
 
@@ -74,13 +78,13 @@ The compiler implements the draft 0.1 language.
 
 - **Language:** structs, enums, tuples, generics with bounds (monomorphized), traits with default methods, associated types and supertraits, `dyn Trait`, operator traits, closures that capture by reference, pattern matching with exhaustiveness checking (guards, ranges, or-patterns, list patterns, `let ... else`, `if let`, `while let`), `?` with `From` conversion, `AnyErr` with `downcast`, `@derive(Eq, Ord, Hash, Show, Transfer)`, constants, type aliases, `async fn`/`.await`, `task.scope` with structured cancellation, workers, implicit numeric widening, checked integer overflow, modules and imports, WIT imports, `test` blocks, `@target`, `@extern`, `@export`/`export fn` and `@deprecated`.
 - **Standard library:** the prelude (`Option`, `Result`, `List`, `Map`, `Set` and their views, `Str`, `Char`, `StrBuilder`, iterators and numeric methods) plus `std.math`, `std.log`, `std.time`, `std.random`, `std.io`, `std.fs`, `std.env`, `std.json`, `std.http`, `std.worker` and `std.dom`, each available on the targets listed in SPEC §10.2. The prelude is written in Puddi ([src/prelude.pud](src/prelude.pud), [std/](std)).
-- **Concurrency:** tasks run concurrently on component-model threads in `wasi` components and on a JSPI scheduler on the JavaScript host; a scope whose body fails cancels its unfinished children at their next suspension point (in components, a wasm exception unwinds the cancelled task). Workers run in worker threads (Node.js) or Web Workers and exchange `Transfer` values.
+- **Concurrency:** tasks run concurrently on component-model threads in `wasi` components and on a JSPI scheduler on the JavaScript host; a scope whose body fails cancels its unfinished children at their next suspension point (in components, a wasm exception unwinds the cancelled task). Workers run in Web Workers, Node.js worker threads or separate component instances on their own threads, and exchange `Transfer` values.
 - **Output:** WasmGC throughout. Structs and enums map to GC structs, generics are monomorphized, and closures and trait objects are GC structs that hold function references. Components are encoded with `wit-component`.
 
 Limitations:
 
-- `std.worker` is available on `browser`; per SPEC §9.4 other targets need a worker interface in their world, and WASI has none yet. On `plugin`, tasks run when they are spawned and the program has no ambient I/O
-- the `browser` target emits a core module with JavaScript glue rather than a component, since browsers cannot load components natively
+- `plugin` components get only what their world imports: tasks run when they are spawned, and `std.worker`, `std.time`, `std.random` and `std.http` are not available there
+- other WASI hosts can run `wasi` components that use workers only if they implement the `puddi:runtime` worker interfaces
 - the embedded runner links WASI 0.3.0 from Wasmtime 50, which satisfies the 0.3.2 imports through semver matching
 - `pud test` runs tests on the JavaScript host, so tests cannot call WIT imports
 - grapheme segmentation is an approximation (combining marks, variation selectors, ZWJ sequences), and case mapping covers ASCII only

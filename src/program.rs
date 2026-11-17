@@ -234,7 +234,7 @@ const STD_AVAIL: &[(&str, &[&str])] = &[
     ("std.env", &["wasi"]),
     ("std.json", &["browser", "wasi", "plugin"]),
     ("std.http", &["browser", "wasi"]),
-    ("std.worker", &["browser"]),
+    ("std.worker", &["browser", "wasi"]),
     ("std.dom", &["browser"]),
 ];
 

@@ -242,7 +242,19 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
             ExitCode::from(1)
         })
     };
-    write(wasm_path.clone(), &compiled.wasm)?;
+    // browser builds ship a component; puddi.mjs unpacks its core module
+    let browser_component = if target == "browser" && mode == Mode::Build {
+        match wit::browser_component(&compiled.wasm) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("error: internal error: browser component encoding failed: {e}");
+                return Err(ExitCode::from(1));
+            }
+        }
+    } else {
+        None
+    };
+    write(wasm_path.clone(), browser_component.as_deref().unwrap_or(&compiled.wasm))?;
     let component = match compiled.component {
         Some(c) => {
             let p = out_dir.join(format!("{name}.wasm"));

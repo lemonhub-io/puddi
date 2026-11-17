@@ -1065,6 +1065,7 @@ dependencies = [
  "serde",
  "tokio",
  "toml",
+ "wasm-encoder 0.263.0",
  "wasmparser 0.263.0",
  "wasmtime",
  "wasmtime-wasi",

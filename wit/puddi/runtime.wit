@@ -1,0 +1,37 @@
+package puddi:runtime@0.1.0;
+
+/// Workers for `std.worker`: each worker is a separate instance of the same
+/// component, started through its `worker-main` export, that exchanges
+/// `Transfer`-encoded messages with its owner.
+interface workers {
+  /// Starts a worker running worker entry `entry`; returns the worker's id.
+  start: func(entry: u32) -> u32;
+  /// Sends a message to the worker.
+  send: func(id: u32, msg: string);
+  /// The next message from the worker; `none` once the worker has finished.
+  recv: async func(id: u32) -> option<string>;
+  /// Closes the worker's inbox and releases it.
+  close: func(id: u32);
+}
+
+/// The worker's side of its channel.
+interface port {
+  /// Sends a message to the owner.
+  send: func(msg: string);
+  /// The next message from the owner; `none` once the owner has closed the channel.
+  recv: async func() -> option<string>;
+  /// Signals that the worker function has returned.
+  done: func();
+}
+
+/// Exported by components that use workers.
+interface worker-main {
+  /// Runs worker entry `entry` in this instance.
+  start: async func(entry: u32);
+}
+
+world workers-host {
+  import workers;
+  import port;
+  export worker-main;
+}

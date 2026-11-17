@@ -2294,6 +2294,7 @@ pub struct __WitFuture {
     pub handle: I32
 }
 @intrinsic("global") fn __global<T>(init: T) -> T
+@intrinsic("worker_dispatch") fn __worker_dispatch(entry: Int)
 @intrinsic("is_err") fn __is_err<T>(v: T) -> Bool
 
 /// Instance-wide runtime state.

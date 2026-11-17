@@ -14,6 +14,50 @@ use crate::program::{self, FnOwner, ModSource, Pkg};
 pub const PRELUDE: &str = include_str!("prelude.pud");
 pub const SOFT: &str = include_str!("soft.pud");
 pub const PLATFORM_WASI: &str = include_str!("platform_wasi.pud");
+/// Worker operations for `wasi` components, through the puddi:runtime interfaces.
+const PLATFORM_WASI_WORKERS: &str = r#"
+pub fn __plat_worker(op: Int, arg: Str) -> Str {
+    let parts = arg.split("\0")
+    match op {
+        50 -> "{__w_puddi_runtime_workers.start(__cast<Int, U32>(arg.parse_int().unwrap()))}"
+        51 -> {
+            __w_puddi_runtime_workers.send(__cast<Int, U32>(parts[0].parse_int().unwrap()), parts.slice(1, parts.len()).join("\0"))
+            ""
+        }
+        52 -> {
+            __w_puddi_runtime_workers.close(__cast<Int, U32>(arg.parse_int().unwrap()))
+            ""
+        }
+        53 -> {
+            __w_puddi_runtime_port.send(arg)
+            ""
+        }
+        54 -> {
+            __w_puddi_runtime_port.done()
+            ""
+        }
+        103 -> match __w_puddi_runtime_workers.recv(__cast<Int, U32>(arg.parse_int().unwrap())) {
+            Some(m) -> "1" + m
+            None -> ""
+        }
+        104 -> match __w_puddi_runtime_port.recv() {
+            Some(m) -> "1" + m
+            None -> ""
+        }
+        _ -> ""
+    }
+}
+
+pub fn __plat_worker_start(entry: U32) { __worker_dispatch(__cast<U32, Int>(entry)) }
+"#;
+
+const PLATFORM_WASI_NO_WORKERS: &str = r#"
+pub fn __plat_worker(op: Int, arg: Str) -> Str {
+    __plat().ok = false
+    "workers are not available in this component"
+}
+"#;
+
 pub const PLATFORM_PLUGIN: &str = include_str!("platform_plugin.pud");
 
 /// WASI interfaces the `wasi` platform layer uses.
@@ -141,9 +185,15 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
         if !errs.is_empty() {
             return Err(errs);
         }
-        let plat: Vec<&str> = if target == "wasi" { WASI_PLATFORM.to_vec() } else { Vec::new() };
+        // workers need the puddi:runtime worker interfaces from the host
+        let uses_workers = target == "wasi" && user_mods.iter().any(|(_, m)| m.imports.iter().any(imports_worker));
+        let mut plat: Vec<&str> = if target == "wasi" { WASI_PLATFORM.to_vec() } else { Vec::new() };
+        if uses_workers {
+            plat.extend(["puddi:runtime/workers", "puddi:runtime/port"]);
+        }
         extra_names.extend(plat.iter().map(|s| s.to_string()));
-        let w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names).map_err(internal_user)?;
+        let extra_exports: Vec<String> = if uses_workers { vec!["puddi:runtime/worker-main".into()] } else { Vec::new() };
+        let w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
         let extra: Vec<wit_parser::InterfaceId> = extra_names.iter().filter_map(|n| crate::wit::Wit::find_interface(&w.resolve, n)).collect();
         // generate binding modules for the needed interfaces and everything they use
         let mut todo: Vec<wit_parser::InterfaceId> = extra.clone();
@@ -167,7 +217,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
                     platform_imports.push_str(&format!("import {mp} as {alias}\n"));
                 }
             }
-            platform_text = format!("{SOFT}\n{PLATFORM_WASI}");
+            platform_text = format!("{SOFT}\n{PLATFORM_WASI}\n{}", if uses_workers { PLATFORM_WASI_WORKERS } else { PLATFORM_WASI_NO_WORKERS });
         } else {
             platform_text = format!("{SOFT}\n{PLATFORM_PLUGIN}");
         }
@@ -352,7 +402,9 @@ fn export_wrappers(w: &crate::wit::Wit, target: &str, has_main: bool, user_expor
     let mut items = String::new();
     let mut missing = Vec::new();
     for (k, (export, f, pname)) in crate::wit::world_exports(w).into_iter().enumerate() {
-        let target_fn = if target == "wasi" && export.starts_with("wasi:cli/run@") {
+        let target_fn = if export.starts_with("puddi:runtime/worker-main@") {
+            "__plat_worker_start".to_string()
+        } else if target == "wasi" && export.starts_with("wasi:cli/run@") {
             if !has_main {
                 missing.push("`fn main()` (the world exports `wasi:cli/run`)".to_string());
                 continue;
@@ -375,4 +427,10 @@ fn export_wrappers(w: &crate::wit::Wit, target: &str, has_main: bool, user_expor
         head.push_str(&format!("import {} as {alias}\n", crate::wit::module_path(&w.resolve, *iid)));
     }
     Ok(head + &items)
+}
+
+/// Whether an import brings in `std.worker`.
+fn imports_worker(i: &ast::Import) -> bool {
+    let p: Vec<&str> = i.path.iter().map(|x| x.name.as_str()).collect();
+    p == ["std", "worker"] || (p == ["std"] && i.names.as_ref().map(|ns| ns.iter().any(|n| n.name == "worker")).unwrap_or(false))
 }
