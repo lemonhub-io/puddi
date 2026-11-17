@@ -14,8 +14,61 @@ use crate::program::{self, FnOwner, ModSource, Pkg};
 pub const PRELUDE: &str = include_str!("prelude.pud");
 pub const SOFT: &str = include_str!("soft.pud");
 pub const PLATFORM_WASI: &str = include_str!("platform_wasi.pud");
+pub const PLATFORM_CORE: &str = include_str!("platform_core.pud");
+pub const PLATFORM_HTTP: &str = include_str!("platform_http.pud");
+
+const PLATFORM_CLOCKS: &str = r#"
+fn __plat_clock(op: Int) -> Float {
+    if op == 15 {
+        let t = __w_wasi_clocks_system_clock.now()
+        __cast<I64, Float>(t.seconds) * 1000.0 + __cast<U32, Float>(t.nanoseconds) / 1000000.0
+    } else {
+        __cast<U64, Float>(__w_wasi_clocks_monotonic_clock.now()) / 1000000.0
+    }
+}
+
+fn __plat_sleep(ms: Int) {
+    if ms > 0 { __w_wasi_clocks_monotonic_clock.wait_for(__cast<Int, U64>(ms) * 1000000) }
+}
+"#;
+
+const PLATFORM_NO_CLOCKS: &str = r#"
+fn __plat_clock(op: Int) -> Float { 0.0 }
+
+fn __plat_sleep(ms: Int) {}
+"#;
+
+const PLATFORM_RANDOM: &str = r#"
+fn __plat_random() -> Float { __cast<U64, Float>(__w_wasi_random_random.get_random_u64() >> 11) * 1.1102230246251565e-16 }
+"#;
+
+const PLATFORM_NO_RANDOM: &str = r#"
+fn __plat_random() -> Float { 0.0 }
+"#;
+
+const PLATFORM_NO_HTTP: &str = r#"
+fn __plat_http(arg: Str) -> Result<Str, Str> { Err("HTTP is not available in this component") }
+"#;
+
+const PLATFORM_LOG: &str = r#"
+fn __plat_log(level: Str, msg: Str) {
+    let l = match level {
+        "trace" -> __w_wasi_logging_logging.Level.Trace
+        "debug" -> __w_wasi_logging_logging.Level.Debug
+        "warn" -> __w_wasi_logging_logging.Level.Warn
+        "error" -> __w_wasi_logging_logging.Level.Error
+        "critical" -> __w_wasi_logging_logging.Level.Critical
+        _ -> __w_wasi_logging_logging.Level.Info
+    }
+    __w_wasi_logging_logging.log(l, "puddi", msg)
+}
+"#;
+
+const PLATFORM_NO_LOG: &str = r#"
+fn __plat_log(level: Str, msg: Str) {}
+"#;
 /// Worker operations for `wasi` components, through the puddi:runtime interfaces.
-const PLATFORM_WASI_WORKERS: &str = r#"
+const PLATFORM_WORKERS: &str = r#"
 pub fn __plat_worker(op: Int, arg: Str) -> Str {
     let parts = arg.split("\0")
     match op {
@@ -51,7 +104,7 @@ pub fn __plat_worker(op: Int, arg: Str) -> Str {
 pub fn __plat_worker_start(entry: U32) { __worker_dispatch(__cast<U32, Int>(entry)) }
 "#;
 
-const PLATFORM_WASI_NO_WORKERS: &str = r#"
+const PLATFORM_NO_WORKERS: &str = r#"
 pub fn __plat_worker(op: Int, arg: Str) -> Str {
     __plat().ok = false
     "workers are not available in this component"
@@ -185,15 +238,50 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
         if !errs.is_empty() {
             return Err(errs);
         }
-        // workers need the puddi:runtime worker interfaces from the host
+        // `wasi` components always get the WASI platform interfaces; workers
+        // need the puddi:runtime worker interfaces from the host
         let uses_workers = target == "wasi" && user_mods.iter().any(|(_, m)| m.imports.iter().any(imports_worker));
         let mut plat: Vec<&str> = if target == "wasi" { WASI_PLATFORM.to_vec() } else { Vec::new() };
         if uses_workers {
             plat.extend(["puddi:runtime/workers", "puddi:runtime/port"]);
         }
         extra_names.extend(plat.iter().map(|s| s.to_string()));
-        let extra_exports: Vec<String> = if uses_workers { vec!["puddi:runtime/worker-main".into()] } else { Vec::new() };
-        let w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
+        let mut extra_exports: Vec<String> = if uses_workers { vec!["puddi:runtime/worker-main".into()] } else { Vec::new() };
+        let mut w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
+        // a plugin gets the capabilities its world imports (SPEC 10.2 "host")
+        let mut caps = Caps { clocks: target == "wasi", random: target == "wasi", http: target == "wasi", log: false, workers: uses_workers };
+        if target == "plugin" {
+            let have = w.imported_interfaces();
+            let has = |n: &str| crate::wit::Wit::find_interface(&w.resolve, n).map(|i| have.contains(&i)).unwrap_or(false);
+            caps.clocks = has("wasi:clocks/monotonic-clock") && has("wasi:clocks/system-clock");
+            caps.random = has("wasi:random/random");
+            caps.http = has("wasi:http/types") && has("wasi:http/client");
+            caps.log = has("wasi:logging/logging");
+            caps.workers = has("puddi:runtime/workers") && has("puddi:runtime/port");
+            for (on, names) in [
+                (caps.clocks, &["wasi:clocks/monotonic-clock", "wasi:clocks/system-clock"][..]),
+                (caps.random, &["wasi:random/random"][..]),
+                (caps.http, &["wasi:http/types", "wasi:http/client"][..]),
+                (caps.log, &["wasi:logging/logging"][..]),
+                (caps.workers, &["puddi:runtime/workers", "puddi:runtime/port"][..]),
+            ] {
+                if on {
+                    plat.extend(names.iter().copied());
+                    extra_names.extend(names.iter().map(|s| s.to_string()));
+                }
+            }
+            if caps.workers {
+                extra_exports.push("puddi:runtime/worker-main".into());
+                w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
+            }
+            let mut host = Vec::new();
+            for (on, m) in [(caps.clocks, "std.time"), (caps.random, "std.random"), (caps.http, "std.http"), (caps.workers, "std.worker")] {
+                if on {
+                    host.push(m.to_string());
+                }
+            }
+            program::set_host_modules(host);
+        }
         let extra: Vec<wit_parser::InterfaceId> = extra_names.iter().filter_map(|n| crate::wit::Wit::find_interface(&w.resolve, n)).collect();
         // generate binding modules for the needed interfaces and everything they use
         let mut todo: Vec<wit_parser::InterfaceId> = extra.clone();
@@ -209,18 +297,22 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
             }
             binding_sources.push((crate::wit::module_path(&w.resolve, i), text));
         }
-        if target == "wasi" {
-            for p in &plat {
-                if let Some(i) = crate::wit::Wit::find_interface(&w.resolve, p) {
-                    let mp = crate::wit::module_path(&w.resolve, i);
-                    let alias = format!("__w_{}", mp.trim_start_matches("std.__wit.").replace('.', "_"));
-                    platform_imports.push_str(&format!("import {mp} as {alias}\n"));
-                }
+        for p in &plat {
+            if let Some(i) = crate::wit::Wit::find_interface(&w.resolve, p) {
+                let mp = crate::wit::module_path(&w.resolve, i);
+                let alias = format!("__w_{}", mp.trim_start_matches("std.__wit.").replace('.', "_"));
+                platform_imports.push_str(&format!("import {mp} as {alias}\n"));
             }
-            platform_text = format!("{SOFT}\n{PLATFORM_WASI}\n{}", if uses_workers { PLATFORM_WASI_WORKERS } else { PLATFORM_WASI_NO_WORKERS });
-        } else {
-            platform_text = format!("{SOFT}\n{PLATFORM_PLUGIN}");
         }
+        let pieces = [
+            if caps.clocks { PLATFORM_CLOCKS } else { PLATFORM_NO_CLOCKS },
+            if caps.random { PLATFORM_RANDOM } else { PLATFORM_NO_RANDOM },
+            if caps.http { PLATFORM_HTTP } else { PLATFORM_NO_HTTP },
+            if caps.workers { PLATFORM_WORKERS } else { PLATFORM_NO_WORKERS },
+        ]
+        .join("\n");
+        let layer = if target == "wasi" { PLATFORM_WASI.to_string() } else { format!("{PLATFORM_PLUGIN}\n{}", if caps.log { PLATFORM_LOG } else { PLATFORM_NO_LOG }) };
+        platform_text = format!("{SOFT}\n{PLATFORM_CORE}\n{layer}\n{pieces}");
         wit_ctx = Some(w);
     }
 
@@ -259,7 +351,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
     }
     // user
     let mut has_main = false;
-    let mut user_exports: Vec<String> = Vec::new();
+    let mut user_exports: Vec<(String, bool)> = Vec::new();
     for (f, m) in user_mods {
         match Ok::<ast::Module, Vec<Diag>>(m) {
             Ok(mut m) => {
@@ -267,7 +359,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
                     for it in &m.items {
                         if let ast::ItemKind::Fn(fd) = &it.kind {
                             if it.vis == ast::Vis::Export {
-                                user_exports.push(fd.name.name.clone());
+                                user_exports.push((fd.name.name.clone(), fd.is_async));
                             }
                         }
                     }
@@ -397,7 +489,7 @@ fn internal_user(m: String) -> Vec<Diag> {
 
 
 /// Export wrappers for the world's exports.
-fn export_wrappers(w: &crate::wit::Wit, target: &str, has_main: bool, user_exports: &[String]) -> Result<String, String> {
+fn export_wrappers(w: &crate::wit::Wit, target: &str, has_main: bool, user_exports: &[(String, bool)]) -> Result<String, String> {
     let mut g = crate::wit::Gen::new(w, None);
     let mut items = String::new();
     let mut missing = Vec::new();
@@ -411,16 +503,22 @@ fn export_wrappers(w: &crate::wit::Wit, target: &str, has_main: bool, user_expor
             }
             items.push_str("fn __wasi_run() -> Result<(), ()> {\n    let code = __entry()\n    if code == 0 { return Ok(()) }\n    __plat_host(12, \"{code}\")\n    Err(())\n}\n\n");
             "__wasi_run".to_string()
-        } else if user_exports.contains(&pname) {
+        } else if let Some((_, is_async)) = user_exports.iter().find(|(n, _)| *n == pname) {
+            if *is_async && !f.kind.is_async() {
+                missing.push(format!("`{export}` to be an `async func` for `export async fn {pname}` (a synchronous export cannot wait)"));
+                continue;
+            }
+            g.await_call = *is_async;
             pname.clone()
         } else {
             missing.push(format!("`export fn {pname}` for `{export}`"));
             continue;
         };
         items.push_str(&g.export_fn(&f, &export, &target_fn, k));
+        g.await_call = false;
     }
     if !missing.is_empty() {
-        return Err(format!("the target world requires exports that the program does not provide: {}", missing.join(", ")));
+        return Err(format!("the program's exports do not match the target world: it needs {}", missing.join(", ")));
     }
     let mut head = String::new();
     for (iid, alias) in &g.imports {
@@ -433,4 +531,13 @@ fn export_wrappers(w: &crate::wit::Wit, target: &str, has_main: bool, user_expor
 fn imports_worker(i: &ast::Import) -> bool {
     let p: Vec<&str> = i.path.iter().map(|x| x.name.as_str()).collect();
     p == ["std", "worker"] || (p == ["std"] && i.names.as_ref().map(|ns| ns.iter().any(|n| n.name == "worker")).unwrap_or(false))
+}
+
+/// Runtime capabilities linked into a component.
+struct Caps {
+    clocks: bool,
+    random: bool,
+    http: bool,
+    log: bool,
+    workers: bool,
 }

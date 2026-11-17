@@ -238,7 +238,20 @@ const STD_AVAIL: &[(&str, &[&str])] = &[
     ("std.dom", &["browser"]),
 ];
 
+thread_local! {
+    /// Modules a plugin's world provides through its imports (SPEC 10.2 "host").
+    static HOST_MODULES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Sets the modules the current plugin world provides.
+pub fn set_host_modules(m: Vec<String>) {
+    HOST_MODULES.with(|h| *h.borrow_mut() = m);
+}
+
 pub fn std_available(path: &str, target: &str) -> Option<bool> {
+    if target == "plugin" && HOST_MODULES.with(|h| h.borrow().iter().any(|m| m == path)) {
+        return Some(true);
+    }
     STD_AVAIL.iter().find(|(p, _)| *p == path).map(|(_, ts)| ts.contains(&target))
 }
 
@@ -898,7 +911,18 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
                         continue;
                     }
                     Some(false) => {
-                        errs.push(Diag::new(imp.span, format!("`{full}` is not available on target `{target}`")));
+                        let need = match full.as_str() {
+                            "std.time" => Some("wasi:clocks/monotonic-clock and wasi:clocks/system-clock"),
+                            "std.random" => Some("wasi:random/random"),
+                            "std.http" => Some("wasi:http/types and wasi:http/client"),
+                            "std.worker" => Some("puddi:runtime/workers and puddi:runtime/port"),
+                            _ => None,
+                        };
+                        let mut d = Diag::new(imp.span, format!("`{full}` is not available on target `{target}`"));
+                        if let (Some(n), "plugin") = (need, target) {
+                            d = d.note(&format!("a plugin gets this module when its world imports {n}"));
+                        }
+                        errs.push(d);
                         continue;
                     }
                     Some(true) => {}

@@ -37,7 +37,7 @@ pud run some_file.pud          # single-file mode, no package needed
 |---|---|
 | `pud new <name>` | create a package |
 | `pud build [--target browser\|wasi\|plugin] [--emit-wat] [-o dir]` | compile to `target/<target>/<name>.wasm` |
-| `pud run [path] [-- args]` | build and run (`wasi`: embedded Wasmtime; `browser`: dev server) |
+| `pud run [path] [-- args]` | build and run (`wasi`: embedded Wasmtime; `browser`: dev server; `plugin`: `-- <export> [args]` calls an export) |
 | `pud test [path] [filter]` | run `test` blocks with Node.js |
 | `pud check [path]` | type-check only |
 | `pud add <repo@version\|path> [--name n]` | add a dependency to `pud.toml` and update `pud.lock` |
@@ -49,7 +49,7 @@ pud run some_file.pud          # single-file mode, no package needed
 ### Targets
 
 - **wasi:** a component of the `wasi:cli/command@0.3.2` world (or `[target.wasi] world` in `pud.toml`). The runtime talks to WASI directly: stdio goes through `stream<u8>`, files through `wasi:filesystem` preopens, time and randomness through `wasi:clocks` and `wasi:random`, and `std.http` through `wasi:http/client`. `run` is lifted with the stackful async ABI and every spawned task runs on its own component-model thread, so a blocking WASI call suspends only its task. Floats are formatted and parsed in software ([src/soft.pud](src/soft.pud)) with the same shortest round-trip output as JavaScript.
-- **plugin:** a component for a host-defined world, set with `[target.plugin] world = "wit/host.wit#plugin"`. `export fn` items implement the world's exports; missing exports are compile errors. See [examples/plugin](examples/plugin).
+- **plugin:** a component for a host-defined world, set with `[target.plugin] world = "wit/host.wit#plugin"`. `export fn` items implement the world's exports (`export async fn` for `async func` exports, which may spawn tasks and await); missing or mismatched exports are compile errors. A plugin gets the standard modules its world provides (SPEC §10.2 "host"): `std.time` with `wasi:clocks/monotonic-clock` and `wasi:clocks/system-clock`, `std.random` with `wasi:random/random`, `std.http` with `wasi:http/types` and `wasi:http/client`, `std.worker` with `puddi:runtime/workers` and `puddi:runtime/port`, and `print` and `std.log` go to `wasi:logging/logging` when the world has it. `pud run --target plugin -- <export> [args]` calls an export in the embedded runtime, which provides those interfaces and makes other host imports trap. See [examples/plugin](examples/plugin) and [examples/plugin-host](examples/plugin-host).
 - **browser:** a component plus `puddi.mjs`, with `std.dom`, `std.http` (fetch) and `std.worker` (Web Workers). Browsers cannot instantiate components yet, so the glue does what `jco transpile` does: it unpacks the core module from the component and instantiates it with the host functions the component's world imports.
 
 ### Workers
@@ -83,7 +83,7 @@ The compiler implements the draft 0.1 language.
 
 Limitations:
 
-- `plugin` components get only what their world imports: tasks run when they are spawned, and `std.worker`, `std.time`, `std.random` and `std.http` are not available there
+- `std.io`, `std.fs` and `std.env` exist only on `wasi`, and `std.dom` only on `browser`, as in SPEC §10.2
 - other WASI hosts can run `wasi` components that use workers only if they implement the `puddi:runtime` worker interfaces
 - the embedded runner links WASI 0.3.0 from Wasmtime 50, which satisfies the 0.3.2 imports through semver matching
 - `pud test` runs tests on the JavaScript host, so tests cannot call WIT imports

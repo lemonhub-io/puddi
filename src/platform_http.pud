@@ -1,0 +1,131 @@
+// ---- HTTP client over wasi:http 0.3
+
+@extern("wasi:http/types@0.3.2", "[stream-new-0][static]request.new") fn __hq_snew() -> I64
+@extern("wasi:http/types@0.3.2", "[stream-write-0][static]request.new") fn __hq_swrite(w: I32, p: I32, n: I32) -> I32
+@extern("wasi:http/types@0.3.2", "[stream-drop-writable-0][static]request.new") fn __hq_sdrop(w: I32)
+@extern("wasi:http/types@0.3.2", "[future-new-1][static]request.new") fn __hq_tnew() -> I64
+@extern("wasi:http/types@0.3.2", "[future-write-1][static]request.new") fn __hq_twrite(w: I32, p: I32) -> I32
+@extern("wasi:http/types@0.3.2", "[future-drop-readable-2][static]request.new") fn __hq_rdrop(r: I32)
+@extern("wasi:http/types@0.3.2", "[future-new-0][static]response.consume-body") fn __hs_fnew() -> I64
+@extern("wasi:http/types@0.3.2", "[future-write-0][static]response.consume-body") fn __hs_fwrite(w: I32, p: I32) -> I32
+@extern("wasi:http/types@0.3.2", "[stream-read-1][static]response.consume-body") fn __hs_read(r: I32, p: I32, n: I32) -> I32
+@extern("wasi:http/types@0.3.2", "[stream-drop-readable-1][static]response.consume-body") fn __hs_rdrop(r: I32)
+@extern("wasi:http/types@0.3.2", "[future-drop-readable-2][static]response.consume-body") fn __hs_tdrop(r: I32)
+
+/// A zeroed buffer: `Ok(..)` with empty payloads in the canonical layout.
+fn __zeroed(n: Int) -> I32 {
+    let p = __cabi_alloc(__cast<Int, I32>(n), 8)
+    for i in 0..n / 8 { __mem_store<I64>(p + __cast<Int, I32>(i * 8), 0) }
+    p
+}
+
+fn __bytes(s: Str) -> List<U8> {
+    let out: List<U8> = List.with_capacity(__str_len(s))
+    for i in 0..__str_len(s) { out.push(__cast<Int, U8>(__str_byte(s, i))) }
+    out
+}
+
+fn __unbytes(b: List<U8>) -> Str {
+    let sb = StrBuilder.new()
+    let m = __cabi_mark()
+    let p = __cabi_alloc(__cast<Int, I32>(b.len()) + 1, 1)
+    for i in 0..b.len() { __mem_store<U8>(p + __cast<Int, I32>(i), b[i]) }
+    sb.push(__str_from_mem(p, __cast<Int, I32>(b.len())))
+    __cabi_reset(m)
+    sb.to_str()
+}
+
+fn __plat_http(arg: Str) -> Result<Str, Str> {
+    let parts = arg.split("\0")
+    let method = parts[0]
+    let url = parts[1]
+    let body = parts.slice(3, parts.len()).join("\0")
+    // split the URL into scheme, authority and path
+    let sep = url.find_from("://", 0)
+    if sep < 0 { return Err("invalid URL `{url}`") }
+    let scheme = __str_slice(url, 0, sep).to_lower()
+    let rest = __str_slice(url, sep + 3, __str_len(url))
+    var slash = rest.find_from("/", 0)
+    if slash < 0 { slash = __str_len(rest) }
+    let authority = __str_slice(rest, 0, slash)
+    var path = __str_slice(rest, slash, __str_len(rest))
+    if path == "" { path = "/" }
+
+    let headers = __w_wasi_http_types.Fields.new()
+    for line in parts[2].split("\n") {
+        let i = line.find_from(":", 0)
+        if i > 0 {
+            match headers.append(__str_slice(line, 0, i).trim().to_lower(), __bytes(__str_slice(line, i + 1, __str_len(line)).trim())) {
+                Ok(_) -> {}
+                Err(e) -> return Err("invalid header `{line}`: {e}")
+            }
+        }
+    }
+    let has_body = body != "" && method != "GET" && method != "HEAD"
+    var contents: Option<__WitStream> = None
+    var body_w: I32 = 0
+    if has_body {
+        let (r, w) = __split_pair(__hq_snew())
+        contents = Some(__WitStream { handle: r })
+        body_w = w
+    }
+    let (tr, tw) = __split_pair(__hq_tnew())
+    let (req, sent) = __w_wasi_http_types.Request.new(headers, contents, __WitFuture { handle: tr }, None)
+    __hq_rdrop(sent.handle)
+    let m = match method {
+        "GET" -> __w_wasi_http_types.Method.Get
+        "HEAD" -> __w_wasi_http_types.Method.Head
+        "POST" -> __w_wasi_http_types.Method.Post
+        "PUT" -> __w_wasi_http_types.Method.Put
+        "DELETE" -> __w_wasi_http_types.Method.Delete
+        "OPTIONS" -> __w_wasi_http_types.Method.Options
+        "PATCH" -> __w_wasi_http_types.Method.Patch
+        other -> __w_wasi_http_types.Method.Other(other)
+    }
+    let sch = match scheme {
+        "http" -> __w_wasi_http_types.Scheme.HTTP
+        "https" -> __w_wasi_http_types.Scheme.HTTPS
+        other -> __w_wasi_http_types.Scheme.Other(other)
+    }
+    if req.set_method(m).is_err() || req.set_scheme(Some(sch)).is_err() || req.set_authority(Some(authority)).is_err() || req.set_path_with_query(Some(path)).is_err() {
+        req.drop()
+        return Err("invalid URL `{url}`")
+    }
+    // the body and trailers are written while the request is in flight
+    __plat_go(|| {
+        let mk = __cabi_mark()
+        if has_body {
+            __stream_write_all(body_w, body, __hq_swrite)
+            __hq_sdrop(body_w)
+        }
+        __hq_twrite(tw, __zeroed(128))
+        __cabi_reset(mk)
+    })
+    let resp = match __w_wasi_http_client.send(req) {
+        Ok(r) -> r
+        Err(e) -> return Err("{e}")
+    }
+    let status = resp.get_status_code()
+    let hs = resp.get_headers()
+    let hb = StrBuilder.new()
+    var first = true
+    for (k, v) in hs.copy_all() {
+        if !first { hb.push("\n") }
+        first = false
+        hb.push(k)
+        hb.push(":")
+        hb.push(__unbytes(v))
+    }
+    hs.drop()
+    let (fr, fw) = __split_pair(__hs_fnew())
+    __plat_go(|| {
+        let mk = __cabi_mark()
+        __hs_fwrite(fw, __zeroed(128))
+        __cabi_reset(mk)
+    })
+    let (stream, trailers) = __w_wasi_http_types.Response.consume_body(resp, __WitFuture { handle: fr })
+    let text = __read_stream(stream.handle, __hs_read)
+    __hs_rdrop(stream.handle)
+    __hs_tdrop(trailers.handle)
+    Ok("{status}\0{hb.to_str()}\0{text}")
+}

@@ -68,3 +68,14 @@ fn reject_programs() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
+
+#[test]
+fn plugin_host_capabilities() {
+    // a plugin whose world imports clocks, random, logging, HTTP and the
+    // worker interfaces gets std.time, std.random, std.log, std.http and std.worker
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/plugin-host");
+    let out = pud().args(["run", "--target", "plugin"]).arg(&dir).args(["--", "run-jobs", "3"]).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+    assert!(text.contains(r#"["worker Some(49)", "job2", "job1", "job0", "concurrent true"]"#), "{text}");
+}

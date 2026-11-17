@@ -1,0 +1,41 @@
+import std.time
+import std.random
+import std.log
+import std.http
+import std.worker
+
+async fn job(i: Int, out: List<Str>) -> Int {
+    time.sleep(30 - i * 10).await
+    out.push("job{i}")
+    i
+}
+
+async fn squarer(port: worker.Port<Int, Int>) {
+    while let Some(x) = port.recv().await {
+        port.send(x * x)
+    }
+}
+
+export async fn run_jobs(n: Int) -> List<Str> {
+    log.warn("starting {n} jobs")
+    print("print goes to the host log")
+    let out: List<Str> = []
+    let t0 = time.monotonic_ms()
+    task.scope(async |s| {
+        for i in 0..n { s.spawn(job(i, out)) }
+        let w = s.worker(squarer)
+        w.send(7)
+        out.push("worker {w.recv().await}")
+    }).await
+    out.push("concurrent {time.monotonic_ms() - t0 < 55.0}")
+    out
+}
+
+export async fn fetch(url: Str) -> Str {
+    match http.get(url).await {
+        Ok(r) -> "{r.status} {r.header("x-echo")}"
+        Err(e) -> "error {e}"
+    }
+}
+
+export fn roll() -> Float { random.float() }

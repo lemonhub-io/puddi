@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------- WASI 0.3 platform
-// Implements the runtime's host operations with WASI interfaces when the
-// program is built as a component for the `wasi` target.
+// stdio, files, environment and exit for the `wasi` target. Shared runtime
+// pieces (tasks, clocks, randomness, HTTP, workers) are in other platform files.
 
 @extern("wasi:cli/stdout@0.3.2", "[stream-new-0]write-via-stream") fn __so_new() -> I64
 @extern("wasi:cli/stdout@0.3.2", "[stream-write-0]write-via-stream") fn __so_write(w: I32, p: I32, n: I32) -> I32
@@ -32,49 +32,17 @@
 @extern("wasi:filesystem/types@0.3.2", "[future-read-1][method]descriptor.read-directory") fn __fs_dir_fread(f: I32, p: I32) -> I32
 @extern("wasi:filesystem/types@0.3.2", "[future-drop-readable-1][method]descriptor.read-directory") fn __fs_dir_fdrop(f: I32)
 
-struct __Plat {
-    var ok: Bool
+/// State of the `wasi` platform layer.
+struct __WasiState {
     var stdin: I32
     var stdin_buf: Str
     var stdin_eof: Bool
     var dirs: List<(__w_wasi_filesystem_types.Descriptor, Str)>
     var dirs_loaded: Bool
-    var next_task: Int
-    tasks: Map<Int, __TaskRec>
-    by_thread: Map<Int, Int>
-    var throw_now: Bool
 }
 
-/// A spawned task running on its own component thread.
-struct __TaskRec {
-    rid: Int
-    parent: Int
-    var thread: Int
-    var cancelled: Bool
-    var done: Bool
-    /// The task this one is blocked on, or -1.
-    var waiting_on: Int
-    waiters: List<Int>
-    children: List<Int>
-}
-
-fn __plat() -> __Plat {
-    __global(__Plat { ok: true, stdin: -1, stdin_buf: "", stdin_eof: false, dirs: [], dirs_loaded: false, next_task: 1, tasks: Map.new(), by_thread: Map.new(), throw_now: false })
-}
-
-fn __split_pair(pair: I64) -> (I32, I32) { (__cast<I64, I32>(pair & 0xFFFFFFFF), __cast<I64, I32>(pair >> 32)) }
-
-/// Writes all of `s` to a stream with the given write function; returns false if the reader went away.
-fn __stream_write_all(w: I32, s: Str, write: fn(I32, I32, I32) -> I32) -> Bool {
-    let n = __str_len(s)
-    let p = __str_to_mem(s)
-    var off = 0
-    while off < n {
-        let res = write(w, p + __cast<Int, I32>(off), __cast<Int, I32>(n - off))
-        off += __cast<U32, Int>(__cast<I32, U32>(res) >> 4)
-        if (res & 15) != 0 { return off >= n }
-    }
-    true
+fn __wasi() -> __WasiState {
+    __global(__WasiState { stdin: -1, stdin_buf: "", stdin_eof: false, dirs: [], dirs_loaded: false })
 }
 
 pub fn __plat_write(fd: Int, s: Str) {
@@ -102,40 +70,6 @@ pub fn __plat_panic(msg: Str) {
     __plat_write(2, "panic: {msg}\n")
 }
 
-pub fn __plat_fmt(x: Float, is32: Bool) -> Str {
-    if is32 { __soft_fmt_f32(x.round_to_f32()) } else { __soft_fmt_f64(x) }
-}
-
-pub fn __plat_parse(s: Str) -> Float { __soft_parse_f64(s) }
-
-pub fn __plat_math(op: Int, x: Float, y: Float) -> Float {
-    match op {
-        0 -> __soft_pow(x, y)
-        1 -> __soft_sin(x)
-        2 -> __soft_cos(x)
-        3 -> __soft_tan(x)
-        4 -> __soft_asin(x)
-        5 -> __soft_acos(x)
-        6 -> __soft_atan(x)
-        7 -> __soft_atan2(x, y)
-        8 -> __soft_exp(x)
-        9 -> __soft_ln(x)
-        10 -> __soft_log2(x)
-        11 -> __soft_log10(x)
-        12 -> __soft_cbrt(x)
-        13 -> __soft_hypot(x, y)
-        14 -> __cast<U64, Float>(__w_wasi_random_random.get_random_u64() >> 11) * 1.1102230246251565e-16
-        15 -> {
-            let t = __w_wasi_clocks_system_clock.now()
-            __cast<I64, Float>(t.seconds) * 1000.0 + __cast<U32, Float>(t.nanoseconds) / 1000000.0
-        }
-        16 -> __cast<U64, Float>(__w_wasi_clocks_monotonic_clock.now()) / 1000000.0
-        _ -> 0.0
-    }
-}
-
-pub fn __plat_ok() -> Bool { __plat().ok }
-
 fn __io_err(e: __w_wasi_filesystem_types.ErrorCode) -> Str {
     let code = match e {
         __w_wasi_filesystem_types.ErrorCode.NoEntry -> "NotFound"
@@ -149,7 +83,7 @@ fn __io_err(e: __w_wasi_filesystem_types.ErrorCode) -> Str {
 
 /// The preopened directory and relative path for a path.
 fn __resolve_path(path: Str) -> Result<(__w_wasi_filesystem_types.Descriptor, Str), Str> {
-    let st = __plat()
+    let st = __wasi()
     if !st.dirs_loaded {
         st.dirs = __w_wasi_filesystem_preopens.get_directories()
         st.dirs_loaded = true
@@ -186,20 +120,6 @@ fn __open(path: Str, create: Bool, truncate: Bool, dir: Bool, write: Bool) -> Re
         Ok(fd) -> Ok(fd)
         Err(e) -> Err(__io_err(e))
     }
-}
-
-fn __read_stream(r: I32, read: fn(I32, I32, I32) -> I32) -> Str {
-    let b = StrBuilder.new()
-    loop {
-        let m = __cabi_mark()
-        let p = __cabi_alloc(16384, 1)
-        let res = read(r, p, 16384)
-        let n = __cast<U32, Int>(__cast<I32, U32>(res) >> 4)
-        if n > 0 { b.push(__str_from_mem(p, __cast<Int, I32>(n))) }
-        __cabi_reset(m)
-        if (res & 15) != 0 { break }
-    }
-    b.to_str()
 }
 
 fn __fs_read_file(path: Str) -> Result<Str, Str> {
@@ -326,7 +246,7 @@ fn __fs_mkdir(path: Str) -> Result<(), Str> {
 }
 
 fn __stdin_fill() -> Bool {
-    let st = __plat()
+    let st = __wasi()
     if st.stdin_eof { return false }
     if st.stdin < 0 {
         let (s, _) = __w_wasi_cli_stdin.read_via_stream()
@@ -343,7 +263,7 @@ fn __stdin_fill() -> Bool {
 }
 
 fn __read_line() -> Result<Str, Str> {
-    let st = __plat()
+    let st = __wasi()
     loop {
         let n = __str_len(st.stdin_buf)
         for i in 0..n {
@@ -359,26 +279,6 @@ fn __read_line() -> Result<Str, Str> {
             let line = st.stdin_buf
             st.stdin_buf = ""
             return Ok(line)
-        }
-    }
-}
-
-fn __res(r: Result<Str, Str>) -> Str {
-    match r {
-        Ok(v) -> v
-        Err(e) -> {
-            __plat().ok = false
-            e
-        }
-    }
-}
-
-fn __unit(r: Result<(), Str>) -> Str {
-    match r {
-        Ok(_) -> ""
-        Err(e) -> {
-            __plat().ok = false
-            e
         }
     }
 }
@@ -410,7 +310,7 @@ pub fn __plat_host(op: Int, arg: Str) -> Str {
         20 -> __res(__read_line())
         21 -> {
             while __stdin_fill() {}
-            let st = __plat()
+            let st = __wasi()
             let s = st.stdin_buf
             st.stdin_buf = ""
             s
@@ -427,21 +327,15 @@ pub fn __plat_host(op: Int, arg: Str) -> Str {
             __plat_write(2, "[{parts[0]}] {parts.slice(1, parts.len()).join("\0")}\n")
             ""
         }
-        40 -> "{__spawn_thread(arg.parse_int().unwrap(), __cur_task())}"
-        41 -> {
-            __cancel_task(arg.parse_int().unwrap())
-            ""
-        }
+        40 -> __plat_tasks(op, arg)
+        41 -> __plat_tasks(op, arg)
+        42 -> __plat_tasks(op, arg)
+        43 -> __plat_tasks(op, arg)
         50 -> __plat_worker(op, arg)
         51 -> __plat_worker(op, arg)
         52 -> __plat_worker(op, arg)
         53 -> __plat_worker(op, arg)
         54 -> __plat_worker(op, arg)
-        42 -> if __task_rec(__cur_task()).cancelled { "1" } else { "0" }
-        43 -> {
-            if __task_rec(__cur_task()).cancelled { __plat().throw_now = true }
-            ""
-        }
         _ -> {
             __plat().ok = false
             "operation {op} is not available on this target"
@@ -449,247 +343,3 @@ pub fn __plat_host(op: Int, arg: Str) -> Str {
     }
 }
 
-// ---- tasks: every spawned task runs on its own component-model thread; a
-// blocking WASI call suspends only the calling thread.
-
-@extern("$root", "[thread-index]") fn __thread_index() -> I32
-@extern("$root", "[thread-new-indirect-v0]") fn __thread_new(table_index: I32, ctx: I32) -> I32
-@extern("$root", "[thread-resume-later]") fn __thread_resume_later(thread: I32)
-@extern("$root", "[thread-suspend]") fn __thread_suspend() -> I32
-
-/// The record of a task; task 0 is the main task.
-fn __task_rec(id: Int) -> __TaskRec {
-    let st = __plat()
-    match st.tasks.get(id) {
-        Some(t) -> t
-        None -> {
-            let t = __TaskRec { rid: -1, parent: -1, thread: __thread_index(), cancelled: false, done: false, waiting_on: -1, waiters: [], children: [] }
-            st.tasks.insert(id, t)
-            t
-        }
-    }
-}
-
-fn __cur_task() -> Int { __plat().by_thread.get(__thread_index()).unwrap_or(0) }
-
-fn __spawn_thread(rid: Int, parent: Int) -> Int {
-    let st = __plat()
-    let id = st.next_task
-    st.next_task += 1
-    let t = __TaskRec { rid, parent, thread: 0, cancelled: false, done: false, waiting_on: -1, waiters: [], children: [] }
-    st.tasks.insert(id, t)
-    if parent >= 0 { __task_rec(parent).children.push(id) }
-    t.thread = __thread_new(0, id)
-    st.by_thread.insert(t.thread, id)
-    __thread_resume_later(t.thread)
-    id
-}
-
-/// Runs `f` on a new thread that is not part of any scope.
-fn __plat_go(f: fn()) {
-    let r = __rt()
-    r.runners.push(f)
-    __spawn_thread(r.runners.len() - 1, -1)
-}
-
-pub fn __plat_thread_main(id: Int) {
-    __run_task(__task_rec(id).rid)
-}
-
-pub fn __plat_thread_done(id: Int) {
-    let st = __plat()
-    let t = __task_rec(id)
-    t.done = true
-    for w in t.waiters { __thread_resume_later(w) }
-    t.waiters.clear()
-    st.by_thread.remove(t.thread)
-}
-
-pub fn __plat_should_throw() -> Bool {
-    let st = __plat()
-    let v = st.throw_now
-    st.throw_now = false
-    v
-}
-
-fn __cancel_task(id: Int) {
-    let t = __task_rec(id)
-    if t.done || t.cancelled { return }
-    t.cancelled = true
-    if t.waiting_on >= 0 {
-        // wake it so it stops at its cancellation point
-        let target = __task_rec(t.waiting_on)
-        match target.waiters.index_of(t.thread) {
-            Some(i) -> { let _ = target.waiters.remove(i) }
-            None -> {}
-        }
-        t.waiting_on = -1
-        __thread_resume_later(t.thread)
-    }
-    for c in t.children { __cancel_task(c) }
-}
-
-fn __wait_task(id: Int) {
-    let me = __cur_task()
-    let mine = __task_rec(me)
-    let target = __task_rec(id)
-    while !target.done && !mine.cancelled {
-        target.waiters.push(__thread_index())
-        mine.waiting_on = id
-        __thread_suspend()
-        mine.waiting_on = -1
-    }
-    if mine.cancelled { __plat().throw_now = true }
-}
-
-pub fn __plat_host_async(op: Int, arg: Str) -> Str {
-    __plat().ok = true
-    match op {
-        100 -> {
-            let ms = arg.parse_int().unwrap_or(0)
-            if ms > 0 { __w_wasi_clocks_monotonic_clock.wait_for(__cast<Int, U64>(ms) * 1000000) }
-            if __task_rec(__cur_task()).cancelled { __plat().throw_now = true }
-            ""
-        }
-        102 -> {
-            __wait_task(arg.parse_int().unwrap())
-            ""
-        }
-        101 -> __res(__http(arg))
-        103 -> __plat_worker(op, arg)
-        104 -> __plat_worker(op, arg)
-        _ -> __plat_host(op, arg)
-    }
-}
-
-// ---- HTTP client over wasi:http 0.3
-
-@extern("wasi:http/types@0.3.2", "[stream-new-0][static]request.new") fn __hq_snew() -> I64
-@extern("wasi:http/types@0.3.2", "[stream-write-0][static]request.new") fn __hq_swrite(w: I32, p: I32, n: I32) -> I32
-@extern("wasi:http/types@0.3.2", "[stream-drop-writable-0][static]request.new") fn __hq_sdrop(w: I32)
-@extern("wasi:http/types@0.3.2", "[future-new-1][static]request.new") fn __hq_tnew() -> I64
-@extern("wasi:http/types@0.3.2", "[future-write-1][static]request.new") fn __hq_twrite(w: I32, p: I32) -> I32
-@extern("wasi:http/types@0.3.2", "[future-drop-readable-2][static]request.new") fn __hq_rdrop(r: I32)
-@extern("wasi:http/types@0.3.2", "[future-new-0][static]response.consume-body") fn __hs_fnew() -> I64
-@extern("wasi:http/types@0.3.2", "[future-write-0][static]response.consume-body") fn __hs_fwrite(w: I32, p: I32) -> I32
-@extern("wasi:http/types@0.3.2", "[stream-read-1][static]response.consume-body") fn __hs_read(r: I32, p: I32, n: I32) -> I32
-@extern("wasi:http/types@0.3.2", "[stream-drop-readable-1][static]response.consume-body") fn __hs_rdrop(r: I32)
-@extern("wasi:http/types@0.3.2", "[future-drop-readable-2][static]response.consume-body") fn __hs_tdrop(r: I32)
-
-/// A zeroed buffer: `Ok(..)` with empty payloads in the canonical layout.
-fn __zeroed(n: Int) -> I32 {
-    let p = __cabi_alloc(__cast<Int, I32>(n), 8)
-    for i in 0..n / 8 { __mem_store<I64>(p + __cast<Int, I32>(i * 8), 0) }
-    p
-}
-
-fn __bytes(s: Str) -> List<U8> {
-    let out: List<U8> = List.with_capacity(__str_len(s))
-    for i in 0..__str_len(s) { out.push(__cast<Int, U8>(__str_byte(s, i))) }
-    out
-}
-
-fn __unbytes(b: List<U8>) -> Str {
-    let sb = StrBuilder.new()
-    let m = __cabi_mark()
-    let p = __cabi_alloc(__cast<Int, I32>(b.len()) + 1, 1)
-    for i in 0..b.len() { __mem_store<U8>(p + __cast<Int, I32>(i), b[i]) }
-    sb.push(__str_from_mem(p, __cast<Int, I32>(b.len())))
-    __cabi_reset(m)
-    sb.to_str()
-}
-
-fn __http(arg: Str) -> Result<Str, Str> {
-    let parts = arg.split("\0")
-    let method = parts[0]
-    let url = parts[1]
-    let body = parts.slice(3, parts.len()).join("\0")
-    // split the URL into scheme, authority and path
-    let sep = url.find_from("://", 0)
-    if sep < 0 { return Err("invalid URL `{url}`") }
-    let scheme = __str_slice(url, 0, sep).to_lower()
-    let rest = __str_slice(url, sep + 3, __str_len(url))
-    var slash = rest.find_from("/", 0)
-    if slash < 0 { slash = __str_len(rest) }
-    let authority = __str_slice(rest, 0, slash)
-    var path = __str_slice(rest, slash, __str_len(rest))
-    if path == "" { path = "/" }
-
-    let headers = __w_wasi_http_types.Fields.new()
-    for line in parts[2].split("\n") {
-        let i = line.find_from(":", 0)
-        if i > 0 {
-            match headers.append(__str_slice(line, 0, i).trim().to_lower(), __bytes(__str_slice(line, i + 1, __str_len(line)).trim())) {
-                Ok(_) -> {}
-                Err(e) -> return Err("invalid header `{line}`: {e}")
-            }
-        }
-    }
-    let has_body = body != "" && method != "GET" && method != "HEAD"
-    var contents: Option<__WitStream> = None
-    var body_w: I32 = 0
-    if has_body {
-        let (r, w) = __split_pair(__hq_snew())
-        contents = Some(__WitStream { handle: r })
-        body_w = w
-    }
-    let (tr, tw) = __split_pair(__hq_tnew())
-    let (req, sent) = __w_wasi_http_types.Request.new(headers, contents, __WitFuture { handle: tr }, None)
-    __hq_rdrop(sent.handle)
-    let m = match method {
-        "GET" -> __w_wasi_http_types.Method.Get
-        "HEAD" -> __w_wasi_http_types.Method.Head
-        "POST" -> __w_wasi_http_types.Method.Post
-        "PUT" -> __w_wasi_http_types.Method.Put
-        "DELETE" -> __w_wasi_http_types.Method.Delete
-        "OPTIONS" -> __w_wasi_http_types.Method.Options
-        "PATCH" -> __w_wasi_http_types.Method.Patch
-        other -> __w_wasi_http_types.Method.Other(other)
-    }
-    let sch = match scheme {
-        "http" -> __w_wasi_http_types.Scheme.HTTP
-        "https" -> __w_wasi_http_types.Scheme.HTTPS
-        other -> __w_wasi_http_types.Scheme.Other(other)
-    }
-    if req.set_method(m).is_err() || req.set_scheme(Some(sch)).is_err() || req.set_authority(Some(authority)).is_err() || req.set_path_with_query(Some(path)).is_err() {
-        req.drop()
-        return Err("invalid URL `{url}`")
-    }
-    // the body and trailers are written while the request is in flight
-    __plat_go(|| {
-        let mk = __cabi_mark()
-        if has_body {
-            __stream_write_all(body_w, body, __hq_swrite)
-            __hq_sdrop(body_w)
-        }
-        __hq_twrite(tw, __zeroed(128))
-        __cabi_reset(mk)
-    })
-    let resp = match __w_wasi_http_client.send(req) {
-        Ok(r) -> r
-        Err(e) -> return Err("{e}")
-    }
-    let status = resp.get_status_code()
-    let hs = resp.get_headers()
-    let hb = StrBuilder.new()
-    var first = true
-    for (k, v) in hs.copy_all() {
-        if !first { hb.push("\n") }
-        first = false
-        hb.push(k)
-        hb.push(":")
-        hb.push(__unbytes(v))
-    }
-    hs.drop()
-    let (fr, fw) = __split_pair(__hs_fnew())
-    __plat_go(|| {
-        let mk = __cabi_mark()
-        __hs_fwrite(fw, __zeroed(128))
-        __cabi_reset(mk)
-    })
-    let (stream, trailers) = __w_wasi_http_types.Response.consume_body(resp, __WitFuture { handle: fr })
-    let text = __read_stream(stream.handle, __hs_read)
-    __hs_rdrop(stream.handle)
-    __hs_tdrop(trailers.handle)
-    Ok("{status}\0{hb.to_str()}\0{text}")
-}

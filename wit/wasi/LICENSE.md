@@ -2,7 +2,8 @@
 
 The files in this directory are the WASI 0.3.2 interface definitions from
 https://github.com/WebAssembly/WASI, bundled unmodified so that `pud` can build
-WASI 0.3 components offline.
+WASI 0.3 components offline, and the `wasi:logging` interface from
+https://github.com/WebAssembly/wasi-logging.
 
 They are licensed under the Apache License 2.0 with LLVM Exception
 (`Apache-2.0 WITH LLVM-exception`); copyright the WASI contributors. The Apache

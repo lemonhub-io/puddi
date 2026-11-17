@@ -201,3 +201,182 @@ async fn run_async(bytes: &[u8], program: &str, args: &[String]) -> wasmtime::Re
     let result = store.run_concurrent(async move |store| command.wasi_cli_run().call_run(store).await).await??;
     Ok(if result.is_ok() { 0 } else { 1 })
 }
+
+/// Host side of `wasi:logging/logging`: messages go to stderr.
+fn add_logging(linker: &mut Linker<State>) -> wasmtime::Result<()> {
+    linker.instance("wasi:logging/logging")?.func_new("log", |_store, _ty, params, _results| {
+        let level = match &params[0] {
+            wasmtime::component::Val::Enum(l) => l.clone(),
+            _ => "info".into(),
+        };
+        let msg = match &params[2] {
+            wasmtime::component::Val::String(s) => s.clone(),
+            _ => String::new(),
+        };
+        if level == "info" {
+            println!("{msg}");
+        } else {
+            eprintln!("[{level}] {msg}");
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn parse_arg(ty: &wasmtime::component::Type, s: &str) -> wasmtime::Result<wasmtime::component::Val> {
+    use wasmtime::component::{Type, Val};
+    let bad = || wasmtime::format_err!("cannot read `{s}` as an argument of type {ty:?}");
+    Ok(match ty {
+        Type::Bool => Val::Bool(s.parse().map_err(|_| bad())?),
+        Type::S8 => Val::S8(s.parse().map_err(|_| bad())?),
+        Type::U8 => Val::U8(s.parse().map_err(|_| bad())?),
+        Type::S16 => Val::S16(s.parse().map_err(|_| bad())?),
+        Type::U16 => Val::U16(s.parse().map_err(|_| bad())?),
+        Type::S32 => Val::S32(s.parse().map_err(|_| bad())?),
+        Type::U32 => Val::U32(s.parse().map_err(|_| bad())?),
+        Type::S64 => Val::S64(s.parse().map_err(|_| bad())?),
+        Type::U64 => Val::U64(s.parse().map_err(|_| bad())?),
+        Type::Float32 => Val::Float32(s.parse().map_err(|_| bad())?),
+        Type::Float64 => Val::Float64(s.parse().map_err(|_| bad())?),
+        Type::Char => Val::Char(s.chars().next().ok_or_else(bad)?),
+        Type::String => Val::String(s.to_string()),
+        Type::Enum(_) => Val::Enum(s.to_string()),
+        _ => return Err(bad()),
+    })
+}
+
+fn show_val(v: &wasmtime::component::Val) -> String {
+    use wasmtime::component::Val;
+    let list = |xs: &[Val]| xs.iter().map(show_val).collect::<Vec<_>>().join(", ");
+    match v {
+        Val::Bool(b) => b.to_string(),
+        Val::S8(x) => x.to_string(),
+        Val::U8(x) => x.to_string(),
+        Val::S16(x) => x.to_string(),
+        Val::U16(x) => x.to_string(),
+        Val::S32(x) => x.to_string(),
+        Val::U32(x) => x.to_string(),
+        Val::S64(x) => x.to_string(),
+        Val::U64(x) => x.to_string(),
+        Val::Float32(x) => x.to_string(),
+        Val::Float64(x) => x.to_string(),
+        Val::Char(c) => format!("{c:?}"),
+        Val::String(s) => format!("{s:?}"),
+        Val::List(xs) | Val::FixedLengthList(xs) => format!("[{}]", list(xs)),
+        Val::Tuple(xs) => format!("({})", list(xs)),
+        Val::Record(fs) => format!("{{{}}}", fs.iter().map(|(k, v)| format!("{k}: {}", show_val(v))).collect::<Vec<_>>().join(", ")),
+        Val::Variant(n, p) => match p {
+            Some(p) => format!("{n}({})", show_val(p)),
+            None => n.clone(),
+        },
+        Val::Enum(n) => n.clone(),
+        Val::Option(o) => match o {
+            Some(x) => format!("some({})", show_val(x)),
+            None => "none".into(),
+        },
+        Val::Result(r) => match r {
+            Ok(Some(x)) => format!("ok({})", show_val(x)),
+            Ok(None) => "ok".into(),
+            Err(Some(x)) => format!("err({})", show_val(x)),
+            Err(None) => "err".into(),
+        },
+        Val::Flags(fs) => format!("{{{}}}", fs.join(", ")),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Calls export `name` of a plugin component with arguments parsed from text
+/// and prints the result. Host imports that the runtime does not provide trap.
+pub fn invoke(component: &[u8], program: &str, name: &str, args: &[String]) -> u8 {
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("error: cannot start the async runtime: {e}");
+            return 1;
+        }
+    };
+    match rt.block_on(invoke_async(component, program, name, args)) {
+        Ok(code) => code,
+        Err(e) => exit_code(&e),
+    }
+}
+
+async fn invoke_async(bytes: &[u8], program: &str, name: &str, args: &[String]) -> wasmtime::Result<u8> {
+    let engine = engine()?;
+    let component = Component::new(&engine, bytes)?;
+    let mut linker = Linker::<State>::new(&engine);
+    wasmtime_wasi::p3::add_to_linker(&mut linker)?;
+    wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
+    add_workers(&mut linker)?;
+    add_logging(&mut linker)?;
+    stub_host_imports(&mut linker, &component, &engine)?;
+    let argv = vec![program.to_string()];
+    let shared = Arc::new(Shared { engine: engine.clone(), component: component.clone(), linker: linker.clone(), argv: argv.clone() });
+    let mut store = Store::new(&engine, new_state(&argv, Some(shared))?);
+    let instance = linker.instantiate_async(&mut store, &component).await?;
+    let idx = match name.split_once('#') {
+        Some((iface, f)) => {
+            let i = instance.get_export_index(&mut store, None, iface).ok_or_else(|| wasmtime::format_err!("the plugin does not export `{iface}`"))?;
+            instance.get_export_index(&mut store, Some(&i), f)
+        }
+        None => instance.get_export_index(&mut store, None, name),
+    }
+    .ok_or_else(|| wasmtime::format_err!("the plugin does not export a function `{name}`"))?;
+    let func = instance.get_func(&mut store, &idx).ok_or_else(|| wasmtime::format_err!("`{name}` is not a function"))?;
+    let ty = func.ty(&store);
+    let ptypes: Vec<_> = ty.params().map(|(_, t)| t).collect();
+    if ptypes.len() != args.len() {
+        return Err(wasmtime::format_err!("`{name}` takes {} argument(s), got {}", ptypes.len(), args.len()));
+    }
+    let params = ptypes.iter().zip(args).map(|(t, a)| parse_arg(t, a)).collect::<wasmtime::Result<Vec<_>>>()?;
+    let mut results = vec![wasmtime::component::Val::Bool(false); ty.results().len()];
+    let results = store
+        .run_concurrent(async move |a| -> wasmtime::Result<Vec<wasmtime::component::Val>> {
+            func.call_concurrent(a, &params, &mut results).await?;
+            Ok(results)
+        })
+        .await??;
+    for r in &results {
+        println!("{}", show_val(r));
+    }
+    Ok(0)
+}
+
+/// A host resource type for stubbed imports.
+struct StubResource;
+
+/// Defines the plugin's application-specific imports (anything outside
+/// `wasi:` and `puddi:`) as functions that trap when called. Wasmtime's
+/// `define_unknown_imports_as_traps` would also shadow the WASI 0.3.0 host
+/// functions that satisfy 0.3.2 imports through semver matching.
+fn stub_host_imports(linker: &mut Linker<State>, component: &Component, engine: &Engine) -> wasmtime::Result<()> {
+    use wasmtime::component::types::ComponentItem;
+    fn stub(li: &mut wasmtime::component::LinkerInstance<'_, State>, parent: &str, name: &str, item: ComponentItem) -> wasmtime::Result<()> {
+        let full = if parent.is_empty() { name.to_string() } else { format!("{parent}#{name}") };
+        match item {
+            ComponentItem::ComponentFunc(f) if f.async_() => li.func_new_concurrent(name, move |_, _, _, _| {
+                let full = full.clone();
+                Box::pin(async move { Err(wasmtime::format_err!("the host function `{full}` is not available in `pud run`")) })
+            }),
+            ComponentItem::ComponentFunc(_) => li.func_new(name, move |_, _, _, _| Err(wasmtime::format_err!("the host function `{full}` is not available in `pud run`"))),
+            ComponentItem::Resource(_) => li.resource(name, wasmtime::component::ResourceType::host::<StubResource>(), |_, _| Ok(())),
+            _ => Ok(()),
+        }
+    }
+    let ty = component.component_type();
+    for (name, ext) in ty.imports(engine) {
+        if name.starts_with("wasi:") || name.starts_with("puddi:") {
+            continue;
+        }
+        match ext.ty {
+            ComponentItem::ComponentInstance(inst) => {
+                let mut li = linker.instance(name)?;
+                for (fname, fe) in inst.exports(engine) {
+                    stub(&mut li, name, fname, fe.ty)?;
+                }
+            }
+            other => stub(&mut linker.root(), "", name, other)?,
+        }
+    }
+    Ok(())
+}

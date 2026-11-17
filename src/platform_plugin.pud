@@ -1,62 +1,45 @@
 // ---------------------------------------------------------------- plugin platform
-// Components for host-defined worlds get no ambient I/O: output is discarded,
-// panics trap, and floats are formatted in software.
+// Components for host-defined worlds get only what their world imports:
+// `print` and `std.log` go to `wasi:logging` when the world has it, and the
+// clock, random, HTTP and worker pieces are linked in for the interfaces the
+// world provides.
 
-pub fn __plat_write(fd: Int, s: Str) {}
-
-pub fn __plat_panic(msg: Str) {}
-
-pub fn __plat_fmt(x: Float, is32: Bool) -> Str {
-    if is32 { __soft_fmt_f32(x.round_to_f32()) } else { __soft_fmt_f64(x) }
+pub fn __plat_write(fd: Int, s: Str) {
+    var t = s
+    if t.ends_with("\n") { t = __str_slice(t, 0, __str_len(t) - 1) }
+    if t != "" { __plat_log(if fd == 2 { "error" } else { "info" }, t) }
 }
 
-pub fn __plat_parse(s: Str) -> Float { __soft_parse_f64(s) }
-
-pub fn __plat_math(op: Int, x: Float, y: Float) -> Float {
-    match op {
-        0 -> __soft_pow(x, y)
-        1 -> __soft_sin(x)
-        2 -> __soft_cos(x)
-        3 -> __soft_tan(x)
-        4 -> __soft_asin(x)
-        5 -> __soft_acos(x)
-        6 -> __soft_atan(x)
-        7 -> __soft_atan2(x, y)
-        8 -> __soft_exp(x)
-        9 -> __soft_ln(x)
-        10 -> __soft_log2(x)
-        11 -> __soft_log10(x)
-        12 -> __soft_cbrt(x)
-        13 -> __soft_hypot(x, y)
-        _ -> 0.0
-    }
-}
-
-struct __PlatState {
-    var ok: Bool
-}
-
-fn __plat_state() -> __PlatState { __global(__PlatState { ok: true }) }
-
-pub fn __plat_ok() -> Bool { __plat_state().ok }
+pub fn __plat_panic(msg: Str) { __plat_log("critical", "panic: {msg}") }
 
 pub fn __plat_host(op: Int, arg: Str) -> Str {
-    if op == 40 {
-        __run_task(arg.parse_int().unwrap())
-        return "0"
+    __plat().ok = true
+    let parts = arg.split("\0")
+    match op {
+        22 -> {
+            __plat_write(1, arg)
+            ""
+        }
+        23 -> {
+            __plat_write(2, arg)
+            ""
+        }
+        30 -> {
+            __plat_log(parts[0], parts.slice(1, parts.len()).join("\0"))
+            ""
+        }
+        40 -> __plat_tasks(op, arg)
+        41 -> __plat_tasks(op, arg)
+        42 -> __plat_tasks(op, arg)
+        43 -> __plat_tasks(op, arg)
+        50 -> __plat_worker(op, arg)
+        51 -> __plat_worker(op, arg)
+        52 -> __plat_worker(op, arg)
+        53 -> __plat_worker(op, arg)
+        54 -> __plat_worker(op, arg)
+        _ -> {
+            __plat().ok = false
+            "operation {op} is not available in this plugin"
+        }
     }
-    if op == 42 || op == 41 || op == 43 { return "0" }
-    __plat_state().ok = false
-    "operation {op} is not available in a plugin"
 }
-
-pub fn __plat_host_async(op: Int, arg: Str) -> Str {
-    if op == 102 { return "" }
-    __plat_host(op, arg)
-}
-
-pub fn __plat_should_throw() -> Bool { false }
-
-pub fn __plat_thread_main(id: Int) {}
-
-pub fn __plat_thread_done(id: Int) {}

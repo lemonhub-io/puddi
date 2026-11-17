@@ -59,6 +59,7 @@ pub const WASI: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     ("http", &[("types.wit", include_str!("../wit/wasi/http/types.wit")), ("worlds.wit", include_str!("../wit/wasi/http/worlds.wit"))]),
+    ("logging", &[("logging.wit", include_str!("../wit/wasi/logging/logging.wit"))]),
     ("puddi-runtime", &[("runtime.wit", include_str!("../wit/puddi/runtime.wit"))]),
 ];
 
@@ -268,11 +269,13 @@ pub struct Gen<'a> {
     pub imports: BTreeMap<InterfaceId, String>,
     buf: Vec<String>,
     tmp: usize,
+    /// The exported Puddi function is async: await its future.
+    pub await_call: bool,
 }
 
 impl<'a> Gen<'a> {
     pub fn new(w: &'a Wit, home: Option<InterfaceId>) -> Gen<'a> {
-        Gen { w, home, imports: BTreeMap::new(), buf: Vec::new(), tmp: 0 }
+        Gen { w, home, imports: BTreeMap::new(), buf: Vec::new(), tmp: 0, await_call: false }
     }
 
     fn r(&self) -> &'a Resolve {
@@ -1119,7 +1122,7 @@ impl<'a> Gen<'a> {
                 args.push(self.bindt(&p.ty, e));
             }
         }
-        let call = format!("{target}({})", args.join(", "));
+        let call = if self.await_call { format!("{target}({}).__await()", args.join(", ")) } else { format!("{target}({})", args.join(", ")) };
         let mut tail = String::new();
         let mut extra = String::new();
         if is_async {

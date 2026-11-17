@@ -79,9 +79,10 @@ fn usage() -> &'static str {
 usage:
   pud new <name>                 create a package
   pud build [path] [--target t] [--emit-wat] [-o dir]
-                                 build for browser, wasi (default) or plugin
+                                 build a component for browser, wasi (default) or plugin
   pud run [path|file.pud] [-- args...]
-                                 build and run with Node.js
+                                 build and run (wasi: embedded Wasmtime,
+                                 browser: dev server, plugin: `-- <export> [args]`)
   pud test [path|file.pud] [filter]
                                  run test blocks
   pud check [path|file.pud]      type-check without generating code
@@ -312,6 +313,17 @@ fn run_component(res: &BuildResult, program: &str, args: &[String]) -> ExitCode 
     ExitCode::from(runner::run(bytes, program, args))
 }
 
+#[cfg(feature = "runtime")]
+fn invoke_plugin(res: &BuildResult, program: &str, export: &str, args: &[String]) -> ExitCode {
+    let (_, bytes) = res.component.as_ref().unwrap();
+    ExitCode::from(runner::invoke(bytes, program, export, args))
+}
+
+#[cfg(not(feature = "runtime"))]
+fn invoke_plugin(res: &BuildResult, _program: &str, _export: &str, _args: &[String]) -> ExitCode {
+    fail(format!("this `pud` was built without the embedded runtime; load {} in its host application", res.component.as_ref().unwrap().0.display()))
+}
+
 #[cfg(not(feature = "runtime"))]
 fn run_component(res: &BuildResult, _program: &str, _args: &[String]) -> ExitCode {
     fail(format!("this `pud` was built without the embedded runtime; run {} with a WASI 0.3 host such as `wasmtime run -Wcomponent-model-async -Wgc`, or set PUD_HOST=node", res.component.as_ref().unwrap().0.display()))
@@ -416,7 +428,10 @@ fn main() -> ExitCode {
                     println!("built {}", res.component.as_ref().map(|c| &c.0).unwrap_or(&res.wasm_path).display());
                     ExitCode::SUCCESS
                 }
-                "run" if target == "plugin" => fail("plugins are loaded by their host application; `pud build --target plugin` produces the component"),
+                "run" if target == "plugin" => match prog_args.split_first() {
+                    Some((export, args)) => invoke_plugin(&res, &program_name, export, args),
+                    None => fail("usage: pud run --target plugin [path] -- <export> [args...]"),
+                },
                 "run" if res.component.is_some() && std::env::var("PUD_HOST").as_deref() != Ok("node") => {
                     let code = run_component(&res, &program_name, prog_args);
                     if !has_dir {
