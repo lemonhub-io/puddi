@@ -1,0 +1,137 @@
+const LIMIT: Int = 3 * 4
+const NAME: Str = "puddi"
+type Pair = (Int, Int)
+
+enum Expr {
+    Num(Int)
+    Add(Expr, Expr)
+    Mul(Expr, Expr)
+    Neg(Expr)
+}
+
+fn eval(e: Expr) -> Int {
+    match e {
+        Expr.Num(n) -> n
+        Expr.Add(a, b) -> eval(a) + eval(b)
+        Expr.Mul(a, b) -> eval(a) * eval(b)
+        Expr.Neg(a) -> -eval(a)
+    }
+}
+
+@derive(Show, Eq)
+struct Config {
+    name: Str
+    verbose: Bool
+    level: Int
+}
+
+struct Vec2 { x: Float, y: Float }
+impl Neg for Vec2 {
+    fn neg(self) -> Vec2 { Vec2 { x: -self.x, y: -self.y } }
+}
+impl Show for Vec2 {
+    fn show(self) -> Str { "<{self.x}, {self.y}>" }
+}
+
+struct Grid {
+    w: Int
+    cells: List<Int>
+}
+impl Index<Pair, Int> for Grid {
+    fn index(self, p: Pair) -> Int { self.cells[p.1 * self.w + p.0] }
+    fn set_index(self, p: Pair, v: Int) { self.cells[p.1 * self.w + p.0] = v }
+}
+
+fn classify(c: Char) -> Str {
+    match c {
+        'a'..='z' -> "lower"
+        'A'..='Z' -> "upper"
+        '0'..='9' -> "digit"
+        _ -> "other"
+    }
+}
+
+fn kind(n: Int) -> Str {
+    match n {
+        0 -> "zero"
+        x if x < 0 -> "negative"
+        1 | 2 | 3 -> "small"
+        _ -> "large"
+    }
+}
+
+fn swap(p: Pair) -> Pair { (p.1, p.0) }
+
+fn main() {
+    print(LIMIT)
+    print(NAME)
+    let e = Expr.Add(Expr.Num(2), Expr.Mul(Expr.Num(3), Expr.Neg(Expr.Num(4))))
+    print(eval(e))
+    let c = Config { name: "a", verbose: false, level: 1 }
+    let d = Config { level: 5, ..c }
+    print(d)
+    print(c == d)
+    print(-Vec2 { x: 1.0, y: -2.5 })
+    let g = Grid { w: 3, cells: List.filled(9, 0) }
+    g[(1, 2)] = 7
+    g[(1, 2)] += 1
+    print(g[(1, 2)])
+    for ch in "aZ5!".chars() { print(classify(ch)) }
+    for n in [0, -5, 2, 99] { print(kind(n)) }
+    print(swap((1, 2)))
+    let fs: List<fn() -> Int> = []
+    for i in 0..3 { fs.push(|| i * 10) }
+    print(fs.map(|f| f()))
+    var counter = 0
+    let bump = |by: Int| {
+        counter += by
+        counter
+    }
+    bump(2)
+    bump(3)
+    print(counter)
+    let n = loop {
+        counter += 1
+        if counter > 7 { break counter * 2 }
+    }
+    print(n)
+    let big: I64 = 9223372036854775807
+    print(big.checked_add(1))
+    print(big)
+    let u: U64 = 18446744073709551615
+    print(u)
+    print(u.wrapping_add(2))
+    print(1.0 / 3.0)
+    print(100.0)
+    print(1.5e-7)
+    let f32v: F32 = 0.1
+    print(f32v)
+    print(2.0.pow(10.0))
+    print(-17 / 5)
+    print(255.wrap_to_u8())
+    print(256.wrap_to_u8())
+    print((3, "x") == (3, "x"))
+    let nested = [[1, 2], [3]]
+    print(nested.flat_map(|l| l))
+    let m: Map<Int, List<Str>> = Map.new()
+    m.insert(1, ["a"])
+    m[1].push("b")
+    print(m)
+    print([3, 1, 2].iter().max())
+    print([1, 2, 3].fold(0, |a, b| a + b))
+    print([1, 2, 3].sum())
+    print([1.5, 2.5].sum())
+    let words = ["b", "a", "c"]
+    words.sort()
+    print(words)
+    print(same(words, words))
+    print(same([1], [1]))
+    print(Some(3).map(|x| x + 1).unwrap_or(0))
+    print(None.unwrap_or(5))
+    let o: Option<Int> = None
+    print(o.is_none())
+    print(Ordering.Less.reverse())
+    print(10.pow(3))
+    print(7.max(9).min(8))
+    print((-3).abs())
+}

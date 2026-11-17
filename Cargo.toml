@@ -1,0 +1,20 @@
+[package]
+name = "puddi"
+version = "0.1.0"
+edition = "2024"
+description = "Compiler and toolchain for the Puddi programming language"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/puddi-lang/puddi"
+
+[[bin]]
+name = "pud"
+path = "src/main.rs"
+
+[dependencies]
+wat = "1.263"
+wasmparser = "0.263"
+toml = "1.2"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3

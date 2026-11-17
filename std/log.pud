@@ -1,0 +1,10 @@
+// std.log: leveled logging to the host's log (stderr on wasi, console in browsers).
+
+fn emit(level: Str, msg: Str) {
+    __host(30, "{level}\0{msg}")
+}
+
+pub fn debug(msg: Str) { emit("debug", msg) }
+pub fn info(msg: Str) { emit("info", msg) }
+pub fn warn(msg: Str) { emit("warn", msg) }
+pub fn error(msg: Str) { emit("error", msg) }

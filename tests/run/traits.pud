@@ -1,0 +1,115 @@
+trait Shape: Show {
+    fn area(self) -> Float
+    fn describe(self) -> Str { "{self.show()} with area {self.area()}" }
+}
+
+@derive(Eq, Ord, Hash, Show)
+struct Point {
+    x: Int
+    y: Int
+}
+
+struct Circle { r: Float }
+struct Square { s: Float }
+
+impl Show for Circle {
+    fn show(self) -> Str { "circle({self.r})" }
+}
+impl Shape for Circle {
+    fn area(self) -> Float { 3.0 * self.r * self.r }
+}
+impl Show for Square {
+    fn show(self) -> Str { "square({self.s})" }
+}
+impl Shape for Square {
+    fn area(self) -> Float { self.s * self.s }
+}
+
+@derive(Eq, Show, Hash, Ord)
+enum Token {
+    Num(Int)
+    Op(Char)
+    Ident { name: Str }
+    End
+}
+
+struct Stack<T> {
+    var items: List<T>
+}
+
+impl<T> Stack<T> {
+    fn new() -> Stack<T> { Stack { items: [] } }
+    fn push(self, x: T) { self.items.push(x) }
+    fn pop(self) -> Option<T> { self.items.pop() }
+    fn len(self) -> Int { self.items.len() }
+}
+
+fn largest<T: Ord>(xs: List<T>) -> Option<T> {
+    var best = xs.first()?
+    for x in xs {
+        if x > best { best = x }
+    }
+    Some(best)
+}
+
+impl Add for Point {
+    fn add(self, other: Point) -> Point { Point { x: self.x + other.x, y: self.y + other.y } }
+}
+
+struct Counter { var n: Int }
+impl Iterator for Counter {
+    type Item = Int
+    fn next(self) -> Option<Int> {
+        if self.n >= 5 { return None }
+        self.n += 1
+        Some(self.n)
+    }
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn double(x: Int) -> Int { x * 2 }
+
+fn make_adder(k: Int) -> fn(Int) -> Int { |x| x + k }
+
+fn main() {
+    let shapes: List<dyn Shape> = [Circle { r: 1.0 }, Square { s: 2.0 }]
+    for s in shapes { print(s.describe()) }
+    let items: List<dyn Show> = [Point { x: 1, y: 2 }, "hi", 42]
+    for it in items { print(it.show()) }
+    let p = Point { x: 1, y: 2 }
+    let q = Point { x: 1, y: 3 }
+    print(p == q)
+    print(p < q)
+    print(p + q)
+    print(p.hash() == Point { x: 1, y: 2 }.hash())
+    let toks = [Token.Num(3), Token.Op('+'), Token.Ident { name: "x" }, Token.End]
+    print(toks)
+    print(Token.Num(1) == Token.Num(1))
+    print(Token.Op('a') < Token.Num(5))
+    let st: Stack<Str> = Stack.new()
+    st.push("a")
+    st.push("b")
+    print(st.pop())
+    print(st.len())
+    print(largest([3, 9, 2]))
+    print(largest(["pear", "apple", "zoo"]))
+    let e: List<Int> = []
+    print(largest(e))
+    let c = Counter { n: 0 }
+    print(c.map(|x| x * 10).collect())
+    for (i, w) in ["a", "b"].enumerate() { print("{i}:{w}") }
+    print(apply(double, 21))
+    print(apply(|x| x - 1, 0))
+    let add5 = make_adder(5)
+    print(add5(10))
+    let sorted = [5, 3, 8, 1].sorted()
+    print(sorted)
+    let people = [("bob", 30), ("al", 25)]
+    people.sort_by_key(|p| p.1)
+    print(people)
+    print((0..5).map(|x| x * x).filter(|x| x > 3).collect())
+    let s = Set.from([1, 2, 2, 3])
+    print(s.len())
+    print(s.contains(2))
+    print(min(3, 7))
+}

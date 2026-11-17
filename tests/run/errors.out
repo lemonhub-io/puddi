@@ -1,0 +1,45 @@
+Ok(42)
+Err(parse error: bad number: x)
+Err(parse error: empty input)
+Err(500 is too big)
+Ok(7)
+Err(negative)
+err: bad number: q
+downcast ok: bad number: q
+Some(40)
+None
+empty
+one: 7
+two: 1 2
+first 1, rest [2, 3, 4]
+ada
+anonymous
+3
+2
+1
+43
+11
+13
+HéLLO WöRLD
+true
+wörld
+pad|
+["a", "b", "", "c"]
+xxx
+["line1", "line2"]
+aBBc
+Some(3.25)
+None
+233
+{"a":[1,2.5,true,null],"b":"hi\n"}
+Some(2.5)
+Some("hi\n")
+true
+[é][a]
+None
+44
+255
+None
+3
+inf
+0.30000000000000004

@@ -1,0 +1,10 @@
+enum Color { Red, Green, Blue }
+fn main() {
+    let c = Color.Red
+    let s = match c {
+        Color.Red -> "r"
+        Color.Green -> "g"
+    }
+    let o: Option<Int> = None
+    match o { Some(x) -> print(x) }
+}

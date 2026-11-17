@@ -1,0 +1,361 @@
+// std.json: JSON values, parsing and serialization.
+
+pub enum Json {
+    Null
+    Bool(Bool)
+    Number(Float)
+    String(Str)
+    Array(List<Json>)
+    Object(Map<Str, Json>)
+}
+
+pub struct ParseErr {
+    pub msg: Str
+    pub pos: Int
+}
+
+impl Show for ParseErr {
+    fn show(self) -> Str { "invalid JSON at byte {self.pos}: {self.msg}" }
+}
+
+impl Error for ParseErr {}
+
+impl Json {
+    pub fn get(self, key: Str) -> Option<Json> {
+        match self {
+            Json.Object(m) -> m.get(key)
+            _ -> None
+        }
+    }
+    pub fn at(self, i: Int) -> Option<Json> {
+        match self {
+            Json.Array(xs) -> xs.get(i)
+            _ -> None
+        }
+    }
+    pub fn is_null(self) -> Bool {
+        match self {
+            Json.Null -> true
+            _ -> false
+        }
+    }
+    pub fn as_bool(self) -> Option<Bool> {
+        match self {
+            Json.Bool(b) -> Some(b)
+            _ -> None
+        }
+    }
+    pub fn as_float(self) -> Option<Float> {
+        match self {
+            Json.Number(n) -> Some(n)
+            _ -> None
+        }
+    }
+    pub fn as_int(self) -> Option<Int> {
+        match self {
+            Json.Number(n) -> n.to_int()
+            _ -> None
+        }
+    }
+    pub fn as_str(self) -> Option<Str> {
+        match self {
+            Json.String(s) -> Some(s)
+            _ -> None
+        }
+    }
+    pub fn as_list(self) -> Option<List<Json>> {
+        match self {
+            Json.Array(xs) -> Some(xs)
+            _ -> None
+        }
+    }
+    pub fn as_map(self) -> Option<Map<Str, Json>> {
+        match self {
+            Json.Object(m) -> Some(m)
+            _ -> None
+        }
+    }
+}
+
+impl Show for Json {
+    fn show(self) -> Str { stringify(self) }
+}
+
+impl Eq for Json {
+    fn eq(self, other: Json) -> Bool {
+        match (self, other) {
+            (Json.Null, Json.Null) -> true
+            (Json.Bool(a), Json.Bool(b)) -> a == b
+            (Json.Number(a), Json.Number(b)) -> a == b
+            (Json.String(a), Json.String(b)) -> a == b
+            (Json.Array(a), Json.Array(b)) -> a == b
+            (Json.Object(a), Json.Object(b)) -> a == b
+            _ -> false
+        }
+    }
+}
+
+fn write_str(b: StrBuilder, s: Str) {
+    b.push_byte(34)
+    for c in s.chars() {
+        let u = c.to_u32().wrap_to_int()
+        if c == '"' {
+            b.push("\\\"")
+        } else if c == '\\' {
+            b.push("\\\\")
+        } else if c == '\n' {
+            b.push("\\n")
+        } else if c == '\r' {
+            b.push("\\r")
+        } else if c == '\t' {
+            b.push("\\t")
+        } else if u < 0x20 {
+            let hex = "0123456789abcdef"
+            b.push("\\u00")
+            b.push_byte(__str_byte(hex, u >> 4))
+            b.push_byte(__str_byte(hex, u & 15))
+        } else {
+            b.push_char(c)
+        }
+    }
+    b.push_byte(34)
+}
+
+fn write_value(b: StrBuilder, v: Json) {
+    match v {
+        Json.Null -> b.push("null")
+        Json.Bool(x) -> b.push(if x { "true" } else { "false" })
+        Json.Number(n) -> {
+            if !n.is_finite() {
+                b.push("null")
+            } else if n.trunc() == n && n.abs() < 1e15 {
+                b.push(n.truncate_to_i64().show())
+            } else {
+                b.push(n.show())
+            }
+        }
+        Json.String(s) -> write_str(b, s)
+        Json.Array(xs) -> {
+            b.push_byte(91)
+            var first = true
+            for x in xs {
+                if !first { b.push_byte(44) }
+                first = false
+                write_value(b, x)
+            }
+            b.push_byte(93)
+        }
+        Json.Object(m) -> {
+            b.push_byte(123)
+            var first = true
+            for (k, x) in m {
+                if !first { b.push_byte(44) }
+                first = false
+                write_str(b, k)
+                b.push_byte(58)
+                write_value(b, x)
+            }
+            b.push_byte(125)
+        }
+    }
+}
+
+/// Serializes a value to compact JSON text.
+pub fn stringify(v: Json) -> Str {
+    let b = StrBuilder.new()
+    write_value(b, v)
+    b.to_str()
+}
+
+pub fn encode(v: Json) -> Str { stringify(v) }
+
+struct Parser {
+    s: Str
+    var pos: Int
+}
+
+impl Parser {
+    fn err(self, msg: Str) -> ParseErr { ParseErr { msg, pos: self.pos } }
+    fn peek(self) -> Int {
+        if self.pos < __str_len(self.s) { __str_byte(self.s, self.pos) } else { -1 }
+    }
+    fn ws(self) {
+        loop {
+            let c = self.peek()
+            if c == 32 || c == 9 || c == 10 || c == 13 {
+                self.pos += 1
+            } else {
+                break
+            }
+        }
+    }
+    fn expect_word(self, w: Str, v: Json) -> Result<Json, ParseErr> {
+        let n = __str_len(w)
+        if self.pos + n <= __str_len(self.s) && __str_slice(self.s, self.pos, self.pos + n) == w {
+            self.pos += n
+            Ok(v)
+        } else {
+            Err(self.err("unexpected character"))
+        }
+    }
+    fn value(self, depth: Int) -> Result<Json, ParseErr> {
+        if depth > 512 { return Err(self.err("nesting too deep")) }
+        self.ws()
+        let c = self.peek()
+        if c == 123 {
+            self.pos += 1
+            let m: Map<Str, Json> = Map.new()
+            self.ws()
+            if self.peek() == 125 {
+                self.pos += 1
+                return Ok(Json.Object(m))
+            }
+            loop {
+                self.ws()
+                if self.peek() != 34 { return Err(self.err("expected a string key")) }
+                let k = self.string()?
+                self.ws()
+                if self.peek() != 58 { return Err(self.err("expected `:`")) }
+                self.pos += 1
+                let v = self.value(depth + 1)?
+                m.insert(k, v)
+                self.ws()
+                let d = self.peek()
+                self.pos += 1
+                if d == 125 { return Ok(Json.Object(m)) }
+                if d != 44 {
+                    self.pos -= 1
+                    return Err(self.err("expected `,` or `\}`"))
+                }
+            }
+        }
+        if c == 91 {
+            self.pos += 1
+            let xs: List<Json> = List.new()
+            self.ws()
+            if self.peek() == 93 {
+                self.pos += 1
+                return Ok(Json.Array(xs))
+            }
+            loop {
+                xs.push(self.value(depth + 1)?)
+                self.ws()
+                let d = self.peek()
+                self.pos += 1
+                if d == 93 { return Ok(Json.Array(xs)) }
+                if d != 44 {
+                    self.pos -= 1
+                    return Err(self.err("expected `,` or `]`"))
+                }
+            }
+        }
+        if c == 34 { return Ok(Json.String(self.string()?)) }
+        if c == 116 { return self.expect_word("true", Json.Bool(true)) }
+        if c == 102 { return self.expect_word("false", Json.Bool(false)) }
+        if c == 110 { return self.expect_word("null", Json.Null) }
+        if c == 45 || (c >= 48 && c <= 57) { return self.number() }
+        if c < 0 { return Err(self.err("unexpected end of input")) }
+        Err(self.err("unexpected character"))
+    }
+    fn number(self) -> Result<Json, ParseErr> {
+        let start = self.pos
+        if self.peek() == 45 { self.pos += 1 }
+        var digits = 0
+        while self.peek() >= 48 && self.peek() <= 57 {
+            self.pos += 1
+            digits += 1
+        }
+        if digits == 0 { return Err(self.err("expected digits")) }
+        if self.peek() == 46 {
+            self.pos += 1
+            var frac = 0
+            while self.peek() >= 48 && self.peek() <= 57 {
+                self.pos += 1
+                frac += 1
+            }
+            if frac == 0 { return Err(self.err("expected digits after `.`")) }
+        }
+        if self.peek() == 101 || self.peek() == 69 {
+            self.pos += 1
+            if self.peek() == 43 || self.peek() == 45 { self.pos += 1 }
+            var ed = 0
+            while self.peek() >= 48 && self.peek() <= 57 {
+                self.pos += 1
+                ed += 1
+            }
+            if ed == 0 { return Err(self.err("expected exponent digits")) }
+        }
+        match __str_slice(self.s, start, self.pos).parse_float() {
+            Some(f) -> Ok(Json.Number(f))
+            None -> Err(self.err("invalid number"))
+        }
+    }
+    fn hex4(self) -> Result<Int, ParseErr> {
+        var v = 0
+        var i = 0
+        while i < 4 {
+            let c = self.peek()
+            let d = if c >= 48 && c <= 57 { c - 48 } else if c >= 97 && c <= 102 { c - 87 } else if c >= 65 && c <= 70 { c - 55 } else { -1 }
+            if d < 0 { return Err(self.err("invalid \\u escape")) }
+            v = v * 16 + d
+            self.pos += 1
+            i += 1
+        }
+        Ok(v)
+    }
+    fn string(self) -> Result<Str, ParseErr> {
+        self.pos += 1
+        let b = StrBuilder.new()
+        loop {
+            let c = self.peek()
+            if c < 0 { return Err(self.err("unterminated string")) }
+            self.pos += 1
+            if c == 34 { return Ok(b.to_str()) }
+            if c == 92 {
+                let e = self.peek()
+                self.pos += 1
+                if e == 34 || e == 92 || e == 47 {
+                    b.push_byte(e)
+                } else if e == 110 {
+                    b.push_byte(10)
+                } else if e == 116 {
+                    b.push_byte(9)
+                } else if e == 114 {
+                    b.push_byte(13)
+                } else if e == 98 {
+                    b.push_byte(8)
+                } else if e == 102 {
+                    b.push_byte(12)
+                } else if e == 117 {
+                    var u = self.hex4()?
+                    if u >= 0xD800 && u < 0xDC00 && self.peek() == 92 {
+                        self.pos += 2
+                        let lo = self.hex4()?
+                        u = 0x10000 + ((u - 0xD800) << 10) + (lo - 0xDC00)
+                    }
+                    match Char.from_u32(u.wrap_to_u32()) {
+                        Some(ch) -> b.push_char(ch)
+                        None -> return Err(self.err("invalid unicode escape"))
+                    }
+                } else {
+                    return Err(self.err("invalid escape"))
+                }
+            } else if c < 0x20 {
+                return Err(self.err("control character in string"))
+            } else {
+                b.push_byte(c)
+            }
+        }
+    }
+}
+
+/// Parses JSON text.
+pub fn parse(s: Str) -> Result<Json, ParseErr> {
+    let p = Parser { s, pos: 0 }
+    let v = p.value(0)?
+    p.ws()
+    if p.pos != __str_len(s) { return Err(p.err("trailing characters")) }
+    Ok(v)
+}
+
+pub fn decode(s: Str) -> Result<Json, ParseErr> { parse(s) }

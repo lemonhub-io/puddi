@@ -1,0 +1,4 @@
+mismatched types: expected `Str`, found `Int`
+mismatched types: expected `Int`, found `I64`
+`f` takes 1 argument(s) but 2 were supplied
+cannot find function `undefined_fn` in this scope

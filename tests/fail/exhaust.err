@@ -1,0 +1,2 @@
+non-exhaustive match: pattern `Color.Blue` is not covered
+non-exhaustive match: pattern `None` is not covered

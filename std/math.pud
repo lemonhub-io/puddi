@@ -1,0 +1,40 @@
+// std.math: mathematical constants and functions.
+
+pub const PI: Float = 3.141592653589793
+pub const E: Float = 2.718281828459045
+pub const TAU: Float = 6.283185307179586
+
+pub fn sqrt(x: Float) -> Float { x.sqrt() }
+pub fn cbrt(x: Float) -> Float { x.cbrt() }
+pub fn pow(x: Float, y: Float) -> Float { x.pow(y) }
+pub fn exp(x: Float) -> Float { x.exp() }
+pub fn ln(x: Float) -> Float { x.ln() }
+pub fn log2(x: Float) -> Float { x.log2() }
+pub fn log10(x: Float) -> Float { x.log10() }
+pub fn sin(x: Float) -> Float { x.sin() }
+pub fn cos(x: Float) -> Float { x.cos() }
+pub fn tan(x: Float) -> Float { x.tan() }
+pub fn asin(x: Float) -> Float { x.asin() }
+pub fn acos(x: Float) -> Float { x.acos() }
+pub fn atan(x: Float) -> Float { x.atan() }
+pub fn atan2(y: Float, x: Float) -> Float { y.atan2(x) }
+pub fn hypot(x: Float, y: Float) -> Float { x.hypot(y) }
+pub fn floor(x: Float) -> Float { x.floor() }
+pub fn ceil(x: Float) -> Float { x.ceil() }
+pub fn round(x: Float) -> Float { x.round() }
+pub fn abs(x: Float) -> Float { x.abs() }
+
+pub fn gcd(a: Int, b: Int) -> Int {
+    var x = a.abs()
+    var y = b.abs()
+    while y != 0 {
+        let t = x % y
+        x = y
+        y = t
+    }
+    x
+}
+
+pub fn lcm(a: Int, b: Int) -> Int {
+    if a == 0 || b == 0 { 0 } else { (a / gcd(a, b) * b).abs() }
+}

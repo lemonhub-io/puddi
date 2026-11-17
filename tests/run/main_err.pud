@@ -1,0 +1,11 @@
+fn run(n: Int) -> Result<(), Str> {
+    if n > 1 { return Err("n too large") }
+    Ok(())
+}
+fn main() -> Result<(), Str> {
+    run(1)?
+    print("first ok")
+    run(5)?
+    print("unreachable")
+    Ok(())
+}

@@ -1,0 +1,75 @@
+// std.fs: file system access (wasi target).
+
+@derive(Eq)
+pub enum IoErr {
+    NotFound(Str)
+    PermissionDenied(Str)
+    AlreadyExists(Str)
+    Other(Str)
+}
+
+impl Show for IoErr {
+    fn show(self) -> Str {
+        match self {
+            IoErr.NotFound(m) -> "not found: {m}"
+            IoErr.PermissionDenied(m) -> "permission denied: {m}"
+            IoErr.AlreadyExists(m) -> "already exists: {m}"
+            IoErr.Other(m) -> m
+        }
+    }
+}
+
+impl Error for IoErr {}
+
+fn to_err(msg: Str) -> IoErr {
+    match msg.split_once("\0") {
+        Some((code, m)) -> match code {
+            "NotFound" -> IoErr.NotFound(m)
+            "PermissionDenied" -> IoErr.PermissionDenied(m)
+            "AlreadyExists" -> IoErr.AlreadyExists(m)
+            _ -> IoErr.Other(m)
+        }
+        None -> IoErr.Other(msg)
+    }
+}
+
+fn call(op: Int, arg: Str) -> Result<Str, IoErr> {
+    let r = __host(op, arg)
+    if __host_ok() { Ok(r) } else { Err(to_err(r)) }
+}
+
+pub fn read(path: Str) -> Result<Str, IoErr> { call(1, path) }
+
+pub fn write(path: Str, content: Str) -> Result<(), IoErr> {
+    call(2, "{path}\0{content}")?
+    Ok(())
+}
+
+pub fn append(path: Str, content: Str) -> Result<(), IoErr> {
+    call(3, "{path}\0{content}")?
+    Ok(())
+}
+
+pub fn exists(path: Str) -> Bool { __host(4, path) == "1" }
+
+pub fn is_dir(path: Str) -> Bool {
+    match call(8, path) {
+        Ok(r) -> r == "1"
+        Err(_) -> false
+    }
+}
+
+pub fn remove(path: Str) -> Result<(), IoErr> {
+    call(5, path)?
+    Ok(())
+}
+
+pub fn list_dir(path: Str) -> Result<List<Str>, IoErr> {
+    let r = call(6, path)?
+    if r.is_empty() { Ok([]) } else { Ok(r.split("\n")) }
+}
+
+pub fn create_dir(path: Str) -> Result<(), IoErr> {
+    call(7, path)?
+    Ok(())
+}

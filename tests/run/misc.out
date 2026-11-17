@@ -1,0 +1,48 @@
+12
+puddi
+-10
+Config { name: "a", verbose: false, level: 5 }
+false
+<-1.0, 2.5>
+8
+lower
+upper
+digit
+other
+zero
+negative
+small
+large
+(2, 1)
+[0, 10, 20]
+5
+16
+None
+9223372036854775807
+18446744073709551615
+1
+0.3333333333333333
+100.0
+1.5e-7
+0.1
+1024.0
+-3
+255
+0
+true
+[1, 2, 3]
+[1: ["a", "b"]]
+Some(3)
+6
+6
+4.0
+["a", "b", "c"]
+true
+false
+4
+5
+true
+Greater
+1000
+8
+3

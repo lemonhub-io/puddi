@@ -1,0 +1,26 @@
+// Counts words read from standard input.
+// Run with: echo "a b a" | pud run
+import std.io
+
+fn count(text: Str) -> Map<Str, Int> {
+    let counts: Map<Str, Int> = [:]
+    for w in text.to_lower().split_whitespace() {
+        counts[w] = counts.get_or(w, 0) + 1
+    }
+    counts
+}
+
+fn main() {
+    let counts = count(io.read_all())
+    let entries = counts.entries()
+    entries.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)))
+    for (w, n) in entries.take(10) {
+        print("{n}\t{w}")
+    }
+}
+
+test "counts repeated words" {
+    let c = count("The cat the hat")
+    assert_eq(c["the"], 2)
+    assert_eq(c.len(), 3)
+}

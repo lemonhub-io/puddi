@@ -1,0 +1,16 @@
+// std.io: standard input and output.
+
+/// Reads one line from standard input without the line ending; None at end of input.
+pub fn read_line() -> Option<Str> {
+    let s = __host(20, "")
+    if __host_ok() { Some(s) } else { None }
+}
+
+/// Reads all remaining standard input.
+pub fn read_all() -> Str { __host(21, "") }
+
+/// Writes text to standard output without a newline.
+pub fn write(s: Str) { __host(22, s) }
+
+/// Writes text to standard error without a newline.
+pub fn ewrite(s: Str) { __host(23, s) }

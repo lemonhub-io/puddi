@@ -1,0 +1,79 @@
+// Loads a todo list from JSON and prints what is left.
+// Run from this directory with: pud run
+import std.fs
+import std.json
+import std.json.{Json}
+
+@derive(Eq, Show)
+struct Todo {
+    title: Str
+    var done: Bool
+}
+
+enum AppErr {
+    Io(fs.IoErr)
+    Parse(json.ParseErr)
+    Shape(Str)
+}
+
+impl Show for AppErr {
+    fn show(self) -> Str {
+        match self {
+            AppErr.Io(e) -> "io: {e}"
+            AppErr.Parse(e) -> "json: {e}"
+            AppErr.Shape(m) -> "unexpected data: {m}"
+        }
+    }
+}
+
+impl From<fs.IoErr> for AppErr {
+    fn from(e: fs.IoErr) -> AppErr { AppErr.Io(e) }
+}
+
+impl From<json.ParseErr> for AppErr {
+    fn from(e: json.ParseErr) -> AppErr { AppErr.Parse(e) }
+}
+
+fn decode(v: Json) -> Result<List<Todo>, AppErr> {
+    let items = v.as_list().ok_or(AppErr.Shape("expected a list"))?
+    let out: List<Todo> = []
+    for it in items {
+        let title = it.get("title").and_then(|t| t.as_str()).ok_or(AppErr.Shape("missing title"))?
+        let done = it.get("done").and_then(|d| d.as_bool()).unwrap_or(false)
+        out.push(Todo { title, done })
+    }
+    Ok(out)
+}
+
+fn load(path: Str) -> Result<List<Todo>, AppErr> {
+    let text = fs.read(path)?
+    decode(json.parse(text)?)
+}
+
+fn main() {
+    let todos = match load("todos.json") {
+        Ok(t) -> t
+        Err(e) -> {
+            print("could not load: {e}")
+            return
+        }
+    }
+
+    let pending = todos.filter(|t| !t.done)
+    print("{pending.len()} of {todos.len()} left")
+
+    for t in pending {
+        print(" - {t.title}")
+    }
+}
+
+test "empty list has nothing pending" {
+    let todos: List<Todo> = []
+    assert_eq(todos.filter(|t| !t.done).len(), 0)
+}
+
+test "decode reads titles" {
+    let v = json.parse("[\{\"title\": \"a\", \"done\": true\}, \{\"title\": \"b\"\}]").unwrap()
+    let todos = decode(v).unwrap()
+    assert_eq(todos, [Todo { title: "a", done: true }, Todo { title: "b", done: false }])
+}

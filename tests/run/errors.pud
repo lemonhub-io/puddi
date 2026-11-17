@@ -1,0 +1,138 @@
+import std.json
+
+enum ParseErr {
+    Empty
+    Bad(Str)
+}
+
+impl Show for ParseErr {
+    fn show(self) -> Str {
+        match self {
+            ParseErr.Empty -> "empty input"
+            ParseErr.Bad(s) -> "bad number: {s}"
+        }
+    }
+}
+impl Error for ParseErr {}
+
+enum AppErr {
+    Parse(ParseErr)
+    TooBig(Int)
+}
+
+impl Show for AppErr {
+    fn show(self) -> Str {
+        match self {
+            AppErr.Parse(e) -> "parse error: {e}"
+            AppErr.TooBig(n) -> "{n} is too big"
+        }
+    }
+}
+
+impl From<ParseErr> for AppErr {
+    fn from(e: ParseErr) -> AppErr { AppErr.Parse(e) }
+}
+
+fn parse(s: Str) -> Result<Int, ParseErr> {
+    if s.is_empty() { return Err(ParseErr.Empty) }
+    s.parse_int().ok_or(ParseErr.Bad(s))
+}
+
+fn check(s: Str) -> Result<Int, AppErr> {
+    let n = parse(s)?
+    if n > 100 { return Err(AppErr.TooBig(n)) }
+    Ok(n * 2)
+}
+
+fn any(s: Str) -> Result<Int, AnyErr> {
+    let n = parse(s)?
+    if n < 0 { return Err(AnyErr.msg("negative")) }
+    Ok(n)
+}
+
+fn first_even(xs: List<Int>) -> Option<Int> {
+    let x = xs.find(|x| x % 2 == 0)?
+    Some(x * 10)
+}
+
+fn describe(xs: List<Int>) -> Str {
+    match xs {
+        [] -> "empty"
+        [x] -> "one: {x}"
+        [a, b] -> "two: {a} {b}"
+        [first, ..rest] -> "first {first}, rest {rest}"
+    }
+}
+
+fn get_name(m: Map<Str, Str>) -> Str {
+    let Some(n) = m.get("name") else { return "anonymous" }
+    n
+}
+
+fn main() {
+    print(check("21"))
+    print(check("x"))
+    print(check(""))
+    print(check("500"))
+    print(any("7"))
+    print(any("-3"))
+    match any("q") {
+        Ok(_) -> print("?")
+        Err(e) -> {
+            print("err: {e}")
+            match e.downcast<ParseErr>() {
+                Some(p) -> print("downcast ok: {p}")
+                None -> print("downcast failed")
+            }
+        }
+    }
+    print(first_even([1, 3, 4, 5]))
+    print(first_even([1, 3]))
+    print(describe([]))
+    print(describe([7]))
+    print(describe([1, 2]))
+    print(describe([1, 2, 3, 4]))
+    print(get_name(["name": "ada"]))
+    print(get_name([:]))
+    let stack = [1, 2, 3]
+    while let Some(top) = stack.pop() { print(top) }
+    if let Some(v) = "42".parse_int() { print(v + 1) }
+    let s = "héllo wörld"
+    print(s.chars().count())
+    print(s.utf8_len())
+    print(s.to_upper())
+    print(s.contains("wör"))
+    match s.find("w") {
+        Some(i) -> print(s.slice_from(i))
+        None -> print("no")
+    }
+    print("  pad  ".trim() + "|")
+    print("a,b,,c".split(","))
+    print("x".repeat(3))
+    print("line1\nline2".lines())
+    print("abc".replace("b", "BB"))
+    print("3.25".parse_float())
+    print("nope".parse_float())
+    print('é'.to_u32())
+    let v = json.parse("\{\"a\": [1, 2.5, true, null], \"b\": \"hi\\n\"\}")
+    match v {
+        Ok(j) -> {
+            print(j)
+            print(j.get("a").unwrap().at(1))
+            print(j.get("b").unwrap().as_str())
+        }
+        Err(e) -> print(e)
+    }
+    print(json.parse("[1, 2").is_err())
+    var acc = ""
+    for g in "e\u{301}a".graphemes() { acc = acc + "[" + g + "]" }
+    print(acc)
+    let x: U8 = 200
+    print(x.checked_add(100))
+    print(x.wrapping_add(100))
+    print(x.saturating_add(100))
+    print(300.to_u8())
+    print(2.7.round_to_int())
+    print(1e300 * 1e300)
+    print(0.1 + 0.2)
+}

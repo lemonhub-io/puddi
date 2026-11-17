@@ -1,0 +1,7 @@
+struct NoShow { a: Int }
+fn main() {
+    let n = NoShow { a: 1 }
+    print("{n}")
+    let big: U8 = 300
+    let xs = [1, "a"]
+}

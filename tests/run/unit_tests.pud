@@ -1,0 +1,15 @@
+fn add(a: Int, b: Int) -> Int { a + b }
+
+test "addition works" {
+    assert_eq(add(2, 2), 4)
+}
+
+test "this one fails" {
+    assert_eq(add(2, 2), 5)
+}
+
+test "lists" {
+    let xs = [3, 1, 2]
+    xs.sort()
+    assert_eq(xs, [1, 2, 3])
+}
