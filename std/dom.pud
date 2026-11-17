@@ -21,7 +21,7 @@ pub fn query(selector: Str) -> Option<Element> { el(__host(60, selector)) }
 pub fn query_all(selector: Str) -> List<Element> {
     let r = __host(78, selector)
     if r == "" { return [] }
-    r.split(",").map(|s| Element { id: s.parse_int().unwrap() }).to_list()
+    r.split(",").map(|s| Element { id: s.parse_int().unwrap() })
 }
 
 /// Creates a detached element with the given tag name.

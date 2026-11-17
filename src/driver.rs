@@ -28,10 +28,12 @@ const WASI_PLATFORM: &[&str] = &[
     "wasi:random/random",
     "wasi:filesystem/types",
     "wasi:filesystem/preopens",
+    "wasi:http/types",
+    "wasi:http/client",
 ];
 
 /// Functions of the platform layer that replace the JavaScript host imports.
-pub const PLATFORM_FNS: &[&str] = &["__plat_write", "__plat_panic", "__plat_fmt", "__plat_parse", "__plat_math", "__plat_host", "__plat_ok", "__plat_host_async"];
+pub const PLATFORM_FNS: &[&str] = &["__plat_write", "__plat_panic", "__plat_fmt", "__plat_parse", "__plat_math", "__plat_host", "__plat_ok", "__plat_host_async", "__plat_should_throw", "__plat_thread_main", "__plat_thread_done"];
 
 /// How to build a component.
 pub struct ComponentOpts {

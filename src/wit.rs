@@ -341,6 +341,16 @@ impl<'a> Gen<'a> {
                 if td.name.is_some() && !matches!(td.kind, TypeDefKind::Handle(_)) {
                     return self.named(*id);
                 }
+                self.ty_structural(*id)
+            }
+        }
+    }
+
+    /// The Puddi type for a type definition, ignoring its name.
+    fn ty_structural(&mut self, id: TypeId) -> String {
+        let td = &self.r().types[id];
+        {
+            {
                 match &td.kind {
                     TypeDefKind::Type(t) => self.ty(t),
                     TypeDefKind::List(e) => format!("List<{}>", self.ty(e)),
@@ -948,7 +958,7 @@ impl<'a> Gen<'a> {
                     }
                 }
                 TypeDefKind::Handle(_) | TypeDefKind::List(_) | TypeDefKind::Option(_) | TypeDefKind::Result(_) | TypeDefKind::Tuple(_) => {
-                    let tt = self.ty(&Type::Id(tid));
+                    let tt = self.ty_structural(tid);
                     let _ = writeln!(items, "pub type {n} = {tt}\n");
                 }
                 TypeDefKind::Future(_) => {
@@ -1080,9 +1090,12 @@ impl<'a> Gen<'a> {
     }
 
     /// Wrapper exporting `target` (a Puddi function) as `f` under the core name `export`.
+    /// Async world functions use the stackful async ABI and return through `task.return`.
     pub fn export_fn(&mut self, f: &Function, export: &str, target: &str, k: usize) -> String {
         let r = self.r();
-        let sig = r.wasm_signature(AbiVariant::GuestExport, f);
+        let is_async = f.kind.is_async();
+        let variant = if is_async { AbiVariant::GuestExportAsyncStackful } else { AbiVariant::GuestExport };
+        let sig = r.wasm_signature(variant, f);
         let ps: Vec<String> = sig.params.iter().enumerate().map(|(i, t)| format!("p{i}: {}", wt(*t))).collect();
         let ret = sig.results.first().map(|t| format!(" -> {}", wt(*t))).unwrap_or_default();
         let mut args = Vec::new();
@@ -1101,7 +1114,36 @@ impl<'a> Gen<'a> {
         }
         let call = format!("{target}({})", args.join(", "));
         let mut tail = String::new();
-        if let Some(t) = &f.result {
+        let mut extra = String::new();
+        if is_async {
+            // results go to the host through `task.return`
+            let (module, fname) = match export.split_once('#') {
+                Some((iface, fname)) => (format!("[export]{iface}"), fname.to_string()),
+                None => ("[export]$root".to_string(), export.to_string()),
+            };
+            let mut tr_params = Vec::new();
+            let mut tr_args = Vec::new();
+            if let Some(t) = &f.result {
+                let rv = self.bindt(t, call);
+                let flat = self.flat(t);
+                if flat.len() > 16 {
+                    let rp = self.bind("I32", format!("__cabi_alloc({}, {})", self.size(t), self.align(t)));
+                    self.store(t, &rv, &rp);
+                    tr_params.push("p0: I32".to_string());
+                    tr_args.push(rp);
+                } else {
+                    let vals = self.lower_flat(t, &rv);
+                    for (i, (v, ft)) in vals.into_iter().zip(flat).enumerate() {
+                        tr_params.push(format!("p{i}: {}", wt(ft)));
+                        tr_args.push(v);
+                    }
+                }
+            } else {
+                self.emit(call);
+            }
+            self.emit(format!("__task_return{k}({})", tr_args.join(", ")));
+            let _ = writeln!(extra, "@extern({}, {})\nfn __task_return{k}({})\n", quote(&module), quote(&format!("[task-return]{fname}")), tr_params.join(", "));
+        } else if let Some(t) = &f.result {
             let rv = self.bindt(t, call);
             if sig.retptr {
                 let rp = self.bind("I32", format!("__cabi_alloc({}, {})", self.size(t), self.align(t)));
@@ -1115,12 +1157,14 @@ impl<'a> Gen<'a> {
             self.emit(call);
         }
         let body = self.take();
-        let mut text = format!("@export({})\nfn __wit_export{k}({}){ret} {{\n", quote(export), ps.join(", "));
+        let core_name = if is_async { format!("[async-lift-stackful]{export}") } else { export.to_string() };
+        let mut text = extra;
+        let _ = writeln!(text, "@export({})\nfn __wit_export{k}({}){ret} {{", quote(&core_name), ps.join(", "));
         for l in body {
             let _ = writeln!(text, "    {l}");
         }
         let _ = writeln!(text, "    {tail}\n}}\n");
-        if sig.retptr {
+        if sig.retptr && !is_async {
             let _ = writeln!(text, "@export({})\nfn __wit_post{k}(p: I32) {{ __cabi_reset(__cabi_base()) }}\n", quote(&format!("cabi_post_{export}")));
         }
         text

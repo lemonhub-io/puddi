@@ -1,4 +1,3 @@
-// host: node
 import std.time
 
 async fn step(name: Str, ms: Int, log: List<Str>) -> Int {

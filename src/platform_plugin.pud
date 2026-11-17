@@ -54,3 +54,9 @@ pub fn __plat_host_async(op: Int, arg: Str) -> Str {
     if op == 102 { return "" }
     __plat_host(op, arg)
 }
+
+pub fn __plat_should_throw() -> Bool { false }
+
+pub fn __plat_thread_main(id: Int) {}
+
+pub fn __plat_thread_done(id: Int) {}

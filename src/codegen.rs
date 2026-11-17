@@ -1362,11 +1362,11 @@ impl<'a> Cg<'a> {
                 self.gen_expr(st, &args[0]);
                 st.emit("call $cabi_realloc");
             }
-            "cabi_mark" => st.emit("global.get $cabi_top"),
-            "cabi_base" => st.emit("i32.const 65536"),
+            "cabi_mark" => st.emit("call $cabi_mark"),
+            "cabi_base" => st.emit("i32.const 16777216"),
             "cabi_reset" => {
                 self.gen_expr(st, &args[0]);
-                st.emit("global.set $cabi_top i32.const 0");
+                st.emit("call $cabi_reset i32.const 0");
             }
             "str_to_mem" => {
                 let sty = format!("(ref null {})", self.tname(&Ty::Str));
@@ -1614,7 +1614,20 @@ impl<'a> Cg<'a> {
   local.get $n call $rt_ensure_mem
   i32.const 0 call $host_take
   local.get $n call $rt_from_mem)
-(global $cabi_top (mut i32) (i32.const 65536))
+(global $cabi_top (mut i32) (i32.const 16777216))
+(global $cabi_depth (mut i32) (i32.const 0))
+(global $cabi_floor (mut i32) (i32.const 16777216))
+;; Scratch allocations nest per thread; with concurrent component threads the
+;; heap is only rewound once no thread holds a mark.
+(func $cabi_mark (result i32)
+  global.get $cabi_depth i32.eqz (if (then global.get $cabi_top global.set $cabi_floor))
+  global.get $cabi_depth i32.const 1 i32.add global.set $cabi_depth
+  global.get $cabi_top)
+(func $cabi_reset (param $m i32)
+  ;; without an open mark (post-return), rewind to the given address
+  global.get $cabi_depth i32.eqz (if (then local.get $m global.set $cabi_top return))
+  global.get $cabi_depth i32.const 1 i32.sub global.set $cabi_depth
+  global.get $cabi_depth i32.eqz (if (then global.get $cabi_floor global.set $cabi_top)))
 (func $cabi_realloc (param $old i32) (param $old_size i32) (param $align i32) (param $new_size i32) (result i32)
   (local $p i32)
   global.get $cabi_top local.get $align i32.const 1 i32.sub i32.add
@@ -1759,18 +1772,29 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
   local.get $op local.get $x local.get $y call {ma})
 (func $host_op (param $op i32) (param $p i32) (param $n i32) (result i32)
   local.get $op local.get $p local.get $n call $rt_from_mem_at call {ho} global.set $plat_pending
+  call {st} (if (then throw $cancelled))
   global.get $plat_pending ref.as_non_null array.len)
 (func $host_take (param $p i32)
   global.get $plat_pending ref.as_non_null local.get $p call $rt_to_mem_at drop)
 (func $host_ok (result i32) call {ok})
 (func $host_async (param $op i32) (param $p i32) (param $n i32) (result i32)
   local.get $op local.get $p local.get $n call $rt_from_mem_at call {ha} global.set $plat_pending
+  call {st} (if (then throw $cancelled))
   i32.const 0)
+(tag $cancelled)
+;; entry point of component threads (spawned tasks); a cancelled task unwinds to here
+(func $plat_thread_entry (param $id i32)
+  (block $out
+    (try_table (catch $cancelled $out)
+      local.get $id call {tm} drop))
+  local.get $id call {td} drop)
+(table $__itab (export "__indirect_function_table") 1 funcref)
+(elem (table $__itab) (i32.const 0) func $plat_thread_entry)
 (func $host_claim (param $t i32) (result i32)
   global.get $plat_pending ref.as_non_null array.len)
 (export "cabi_realloc" (func $cabi_realloc))
 "#,
-            w = n[0], pa = n[1], fm = n[2], pr = n[3], ma = n[4], ho = n[5], ok = n[6], ha = n[7]
+            w = n[0], pa = n[1], fm = n[2], pr = n[3], ma = n[4], ho = n[5], ok = n[6], ha = n[7], st = n[8], tm = n[9], td = n[10]
         );
         cg.exports.retain(|e| !e.contains("\"test_"));
     } else {
@@ -1828,6 +1852,7 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
     let mut features = wasmparser::WasmFeatures::default();
     features.insert(wasmparser::WasmFeatures::GC);
     features.insert(wasmparser::WasmFeatures::FUNCTION_REFERENCES);
+    features.insert(wasmparser::WasmFeatures::EXCEPTIONS);
     features.insert(wasmparser::WasmFeatures::REFERENCE_TYPES);
     features.insert(wasmparser::WasmFeatures::BULK_MEMORY);
     features.insert(wasmparser::WasmFeatures::SATURATING_FLOAT_TO_INT);

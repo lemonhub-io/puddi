@@ -19,6 +19,7 @@ wit-parser = "0.263"
 wit-component = "0.263"
 wasmtime = { version = "50", features = ["component-model", "component-model-async", "gc", "gc-drc", "cranelift"], optional = true }
 wasmtime-wasi = { version = "50", features = ["p3"], optional = true }
+wasmtime-wasi-http = { version = "50", features = ["p3"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 semver = "1"
 
@@ -28,4 +29,4 @@ opt-level = 3
 [features]
 default = ["runtime"]
 # Embedded WASI 0.3 runtime used by `pud run --target wasi`.
-runtime = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:tokio"]
+runtime = ["dep:wasmtime", "dep:wasmtime-wasi", "dep:wasmtime-wasi-http", "dep:tokio"]
