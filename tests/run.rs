@@ -77,5 +77,10 @@ fn plugin_host_capabilities() {
     let out = pud().args(["run", "--target", "plugin"]).arg(&dir).args(["--", "run-jobs", "3"]).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
-    assert!(text.contains(r#"["worker Some(49)", "job2", "job1", "job0", "concurrent true"]"#), "{text}");
+    // the worker's reply races the jobs (starting a worker instance takes longer on
+    // some hosts), so only the jobs' order and the final entry are fixed
+    let line = text.lines().find(|l| l.starts_with('[')).unwrap_or_else(|| panic!("{text}"));
+    let without_worker = line.replace(r#""worker Some(49)", "#, "");
+    assert!(line.contains(r#""worker Some(49)""#), "{text}");
+    assert_eq!(without_worker, r#"["job2", "job1", "job0", "concurrent true"]"#, "{text}");
 }
