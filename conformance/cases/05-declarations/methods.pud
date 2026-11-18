@@ -1,0 +1,26 @@
+// spec: 5.2
+struct Point { x: Int, var y: Int }
+
+impl Point {
+    fn new(x: Int, y: Int) -> Point { Point { x, y } }
+    fn len_sq(self) -> Int { self.x * self.x + self.y * self.y }
+    fn move_down(self, dy: Int) { self.y += dy }       // no separate mutable receiver
+    fn moved(self, dy: Int) -> Point { Point.new(self.x, self.y + dy) }
+}
+
+impl Point {
+    fn describe(self) -> Str { "({self.x}, {self.y})" }  // several impl blocks
+}
+
+fn main() {
+    let p = Point.new(3, 4)
+    print(p.len_sq())
+    p.move_down(1)
+    print(p.describe())
+    print(p.moved(10).moved(1).y)
+    print(p.y)
+}
+//> 25
+//> (3, 5)
+//> 16
+//> 5

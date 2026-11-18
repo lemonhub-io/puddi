@@ -1,0 +1,43 @@
+// spec: 2.5
+struct P { x: Int, y: Int }
+enum Dir { Up, Down
+    Left
+}
+
+fn sum(a: Int,
+       b: Int) -> Int {
+    a + b
+}
+
+fn main() {
+    let price = 3
+    let count = 4
+    let total = price * count +
+        1                        // line ends with an operator
+    print(total)
+    let xs = [1, 2, 3,
+        4, 5]                    // inside an unclosed bracket
+    let ys = xs
+        .filter(|x| x % 2 == 1)  // next line starts with `.`
+        .map(|x| x * 10)
+    print(ys)
+    print(sum(
+        1,
+        2
+    ))
+    let a = 1; let b = 2; print(a + b)
+    let p = P { x: 1,
+        y: 2 }
+    let d = match Dir.Left { Dir.Up -> "up", Dir.Down -> "down"
+        Dir.Left -> "left" }
+    print("{p.x}{p.y} {d}")
+    let neg = 5
+    -3                           // a new statement, not `5 - 3`
+    print(neg)
+}
+//> 13
+//> [10, 30, 50]
+//> 3
+//> 3
+//> 12 left
+//> 5

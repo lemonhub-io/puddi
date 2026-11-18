@@ -1,0 +1,10 @@
+// spec: 3.9
+// exit: 101
+// match: contains
+fn main() {
+    let m = ["a": 1]
+    print(m["b"])
+    print("unreachable")
+}
+//> panic:
+//!~ unreachable

@@ -1,0 +1,7 @@
+// spec: 3.13
+// mode: reject
+struct Inner { x: Int }
+@derive(Show)
+struct Outer { i: Inner }
+fn main() { print(Outer { i: Inner { x: 1 } }) }
+//~ Inner

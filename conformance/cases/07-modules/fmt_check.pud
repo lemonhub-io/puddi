@@ -1,0 +1,15 @@
+// spec: 7.4
+// mode: fmt
+// args: --check
+// This file is already in the official style.
+struct Point {
+    x: Int
+    var y: Int
+}
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    if p.x > 0 {
+        print("positive")
+    }
+}

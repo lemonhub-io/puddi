@@ -1,0 +1,8 @@
+// spec: 3.7
+// mode: reject
+// I64 never widens to a float type.
+fn main() {
+    let y: I64 = 5
+    let f: Float = y
+}
+//~ mismatched types

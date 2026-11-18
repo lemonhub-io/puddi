@@ -1,0 +1,7 @@
+[package]
+name = "plug"
+version = "0.1.0"
+puddi = "0.1"
+
+[target.plugin]
+world = "wit/host.wit#plugin"

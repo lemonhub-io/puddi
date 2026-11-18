@@ -1,0 +1,5 @@
+import net.http             // imports between modules of one package may form cycles
+
+pub fn clean(p: Str) -> Str { if p.starts_with("/") { p } else { "/" + p } }
+
+pub fn fetch_twice(p: Str) -> Str { http.describe(http.get(p)) + " x2" }

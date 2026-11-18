@@ -1,0 +1,10 @@
+// spec: 3.12
+// mode: reject
+trait Speak {
+    fn speak(self) -> Str
+    fn loud(self) -> Str
+}
+struct Cat {}
+impl Speak for Cat { fn speak(self) -> Str { "meow" } }
+fn main() {}
+//~ missing method `loud`

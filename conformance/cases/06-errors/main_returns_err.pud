@@ -1,0 +1,12 @@
+// spec: 6.4
+// exit: 1
+fn step(n: Int) -> Result<Int, Str> { if n > 1 { Err("n too large") } else { Ok(n) } }
+fn main() -> Result<(), Str> {
+    let a = step(1)?
+    print("first ok {a}")
+    let b = step(5)?
+    print("unreachable {b}")
+    Ok(())
+}
+//> first ok 1
+//> error: n too large

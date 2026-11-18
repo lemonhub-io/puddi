@@ -1,0 +1,14 @@
+// spec: 10.2 8.1
+// mode: build
+// args: --target browser
+import std.dom
+import std.json
+import std.time
+import std.random
+import std.http
+import std.worker
+import std.log
+
+fn main() {
+    print(json.parse("1").is_ok())
+}

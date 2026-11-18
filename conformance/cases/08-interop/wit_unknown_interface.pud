@@ -1,0 +1,5 @@
+// spec: 8.2
+// mode: reject
+import wasi:nope/thing
+fn main() {}
+//~ cannot find WIT interface `wasi:nope/thing`

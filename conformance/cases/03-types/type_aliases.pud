@@ -1,0 +1,19 @@
+// spec: 3.15
+type UserId = Int
+type Callback<T> = fn(T) -> ()
+type Table = Map<Str, List<Int>>
+
+fn next_id(id: UserId) -> Int { id + 1 }      // same type as Int
+fn run(cb: Callback<Str>) { cb("called") }
+
+fn main() {
+    let id: UserId = 41
+    let plain: Int = id
+    print(next_id(plain))
+    run(|s| print(s))
+    let t: Table = ["a": [1, 2]]
+    print(t)
+}
+//> 42
+//> called
+//> ["a": [1, 2]]

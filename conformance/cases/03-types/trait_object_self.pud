@@ -1,0 +1,10 @@
+// spec: 3.14
+// mode: reject
+// A method that mentions `Self` outside the receiver makes the trait unusable as `dyn`.
+trait Cloneish { fn dup(self) -> Self }
+struct V {}
+impl Cloneish for V { fn dup(self) -> Self { V {} } }
+fn main() {
+    let v: dyn Cloneish = V {}
+}
+//~ cannot be used as `dyn Cloneish`

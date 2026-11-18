@@ -1,0 +1,6 @@
+// spec: 8.1
+// mode: reject
+// args: --target plugin
+// Every export the world requires must be provided.
+export fn add(a: Int, b: Int) -> Int { a + b }
+//~ greet

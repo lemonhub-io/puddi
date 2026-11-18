@@ -1,0 +1,6 @@
+// spec: 2.3
+// mode: reject
+fn main() {
+    let trait = 1
+}
+//~ found `trait`

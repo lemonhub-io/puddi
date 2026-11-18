@@ -1,0 +1,8 @@
+// spec: 4.4
+// mode: reject
+// A refutable pattern in a plain `let` must use `let ... else`.
+fn main() {
+    let o: Option<Int> = None
+    let Some(v) = o
+}
+//~ refutable pattern

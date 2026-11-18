@@ -1,0 +1,52 @@
+// spec: 4.5
+fn main() {
+    let xs = ["a", "b", "c"]
+    for x in xs { print(x) }
+    for (i, x) in xs.enumerate() { print("{i}{x}") }
+    var total = 0
+    for i in 0..10 {
+        if i % 2 == 0 { continue }
+        if i > 7 { break }
+        total += i
+    }
+    print(total)
+    var n = 0
+    while n < 5 { n += 2 }
+    print(n)
+    let queue = [1, 2, 3]
+    while let Some(job) = queue.pop() { print("job {job}") }
+    var k = 0
+    let found = loop {
+        k += 1
+        if k * k > 50 { break k }
+    }
+    print(found)
+    let unit = for x in [1] { x + 1 }       // `for` has type ()
+    print(unit == ())
+    let m = ["x": 1, "y": 2]
+    for (key, v) in m { print("{key}={v}") }
+    var outer = 0
+    for i in 0..3 {
+        for j in 0..3 {
+            if j > i { break }
+            outer += 1
+        }
+    }
+    print(outer)
+}
+//> a
+//> b
+//> c
+//> 0a
+//> 1b
+//> 2c
+//> 16
+//> 6
+//> job 3
+//> job 2
+//> job 1
+//> 8
+//> true
+//> x=1
+//> y=2
+//> 6

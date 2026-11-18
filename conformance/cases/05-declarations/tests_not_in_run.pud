@@ -1,0 +1,7 @@
+// spec: 5.6
+// Test blocks are compiled only by `pud test`.
+fn main() { print("main only") }
+test "not compiled by run" {
+    panic("must not run")
+}
+//> main only

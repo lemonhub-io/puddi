@@ -1,0 +1,13 @@
+// spec: 6.2
+// exit: 101
+// A panic cannot be caught: it unwinds through every caller.
+fn inner(n: Int) -> Int { if n > 2 { panic("too deep") } else { inner(n + 1) } }
+fn outer() -> Result<Int, Str> { Ok(inner(0)) }
+fn main() {
+    match outer() {
+        Ok(v) -> print(v)
+        Err(e) -> print("caught {e}")
+    }
+    print("unreachable")
+}
+//> panic: too deep

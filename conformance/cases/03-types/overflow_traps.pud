@@ -1,0 +1,10 @@
+// spec: 3.7 6.2
+// exit: 101
+fn main() {
+    let x = 2147483647
+    print("before")
+    print(x + 1)
+    print("unreachable")
+}
+//> before
+//> panic: integer overflow

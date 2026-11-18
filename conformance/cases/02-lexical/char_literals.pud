@@ -1,0 +1,17 @@
+// spec: 2.7
+fn main() {
+    let a = 'a'
+    let nl = '\n'
+    let smile = '\u{1F600}'
+    let q = '\''
+    print(a.to_u32())
+    print(nl.to_u32())
+    print(smile.to_u32())
+    print(q.to_u32())
+    print("{a}{smile}")
+}
+//> 97
+//> 10
+//> 128512
+//> 39
+//> a😀

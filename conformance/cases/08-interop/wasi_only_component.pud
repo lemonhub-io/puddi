@@ -1,0 +1,7 @@
+// spec: 8.1 8.2
+// A wasi build is a component of wasi:cli/command; `fn main` is its entry.
+import std.env
+fn main() {
+    print(env.args().len() >= 0)
+}
+//> true

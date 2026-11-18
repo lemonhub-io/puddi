@@ -1,0 +1,34 @@
+// spec: 3.2
+fn main() {
+    let b: Bool = true
+    let i: Int = -1
+    let i32v: I32 = i
+    let i8v: I8 = -128
+    let i16v: I16 = -32768
+    let i64v: I64 = -9223372036854775807
+    let u8v: U8 = 255
+    let u16v: U16 = 65535
+    let u32v: U32 = 4294967295
+    let u64v: U64 = 18446744073709551615
+    let f: Float = 0.5
+    let f64v: F64 = f
+    let f32v: F32 = 0.25
+    let c: Char = 'z'
+    let s: Str = "s"
+    let u: () = ()
+    let t: (Int, Str, Bool) = (1, "a", false)
+    let g: fn(Int, Int) -> Int = |a, b| a + b
+    let l: List<Int> = [1]
+    let m: Map<Str, Int> = ["a": 1]
+    let st: Set<Int> = Set.from([1, 1, 2])
+    let o: Option<Int> = Some(1)
+    let r: Result<Int, Str> = Err("e")
+    print("{b} {i32v} {i8v} {i16v} {i64v}")
+    print("{u8v} {u16v} {u32v} {u64v}")
+    print("{f64v} {f32v} {c} {s} {u == ()} {t}")
+    print("{g(1, 2)} {l} {m} {st.len()} {o} {r}")
+}
+//> true -1 -128 -32768 -9223372036854775807
+//> 255 65535 4294967295 18446744073709551615
+//> 0.5 0.25 z s true (1, "a", false)
+//> 3 [1] ["a": 1] 2 Some(1) Err("e")

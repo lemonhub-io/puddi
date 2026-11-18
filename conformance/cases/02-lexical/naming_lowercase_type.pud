@@ -1,0 +1,9 @@
+// spec: 2.4 3.3
+// xfail: a struct literal is only parsed when the type name starts with an uppercase letter
+// A lowercase type name violates the convention, which is a warning, not an error.
+struct point_2d { x: Int }
+fn main() {
+    let p = point_2d { x: 3 }
+    print(p.x)
+}
+//> 3

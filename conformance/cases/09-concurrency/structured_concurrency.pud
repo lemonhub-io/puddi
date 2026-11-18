@@ -1,0 +1,27 @@
+// spec: 9.2
+import std.time
+
+async fn step(name: Str, ms: Int, log: List<Str>) -> Int {
+    time.sleep(ms).await
+    log.push(name)
+    ms
+}
+
+async fn main() {
+    let log: List<Str> = []
+    let total = task.scope(async |s| {
+        let a = s.spawn(step("slow", 60, log))
+        let b = s.spawn(step("fast", 5, log))
+        let c = s.spawn(step("mid", 30, log))
+        a.await + b.await + c.await
+    }).await
+    print("{total} {log}")                       // children run concurrently
+
+    let body = task.scope(async |s| {
+        s.spawn(step("unawaited", 20, log))
+        "body done"
+    }).await
+    print("{body} {log.last()}")                 // the scope waits for every child
+}
+//> 95 ["fast", "mid", "slow"]
+//> body done Some("unawaited")

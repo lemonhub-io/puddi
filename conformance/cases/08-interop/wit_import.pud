@@ -1,0 +1,13 @@
+// spec: 8.2 8.3
+// Importing a WIT interface generates typed bindings.
+import wasi:clocks/system-clock as clock
+import wasi:random/random
+
+fn main() {
+    let now = clock.now()
+    print(now.seconds > 1000000000)
+    let bytes = random.get_random_bytes(4)
+    print(bytes.len())
+}
+//> true
+//> 4

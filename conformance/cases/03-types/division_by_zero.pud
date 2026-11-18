@@ -1,0 +1,11 @@
+// spec: 3.7 6.2
+// exit: 101
+// match: contains
+fn div(a: Int, b: Int) -> Int { a / b }
+fn main() {
+    print(div(7, 2))
+    print(div(1, 0))
+    print("unreachable")
+}
+//> 3
+//!~ unreachable

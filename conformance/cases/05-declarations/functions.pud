@@ -1,0 +1,36 @@
+// spec: 5.1
+fn add(a: Int, b: Int) -> Int { a + b }
+fn first_negative(xs: List<Int>) -> Int {
+    for x in xs {
+        if x < 0 { return x }             // early return
+    }
+    0
+}
+fn log(msg: Str) { print("log: {msg}") }
+fn trailing(a: Int, b: Int,) -> Int { a - b }
+async fn load(url: Str) -> Result<Str, Str> {
+    if url.is_empty() { return Err("empty url") }
+    Ok("body of {url}")
+}
+fn early() {
+    if true { return }
+    print("unreachable")
+}
+
+async fn main() {
+    print(add(2, 3))
+    print(first_negative([3, -4, -5]))
+    print(first_negative([1]))
+    log("hi")
+    print(trailing(5, 2,))
+    print(load("x").await)
+    print(load("").await)
+    early()
+}
+//> 5
+//> -4
+//> 0
+//> log: hi
+//> 3
+//> Ok("body of x")
+//> Err("empty url")

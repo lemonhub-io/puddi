@@ -1,0 +1,9 @@
+// spec: 3.12
+// mode: reject
+// Traits are nominal: a matching method does not implement the trait.
+trait Speak { fn speak(self) -> Str }
+struct Cat {}
+impl Cat { fn speak(self) -> Str { "meow" } }
+fn talk<T: Speak>(x: T) -> Str { x.speak() }
+fn main() { print(talk(Cat {})) }
+//~ does not implement `Speak`

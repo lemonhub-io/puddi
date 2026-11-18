@@ -1,0 +1,33 @@
+// spec: 9.3
+import std.time
+
+async fn worker(log: List<Str>) -> Int {
+    log.push("started")
+    time.sleep(500).await                        // cancelled here: the code after never runs
+    log.push("resumed after cancellation")
+    1
+}
+async fn checker(log: List<Str>) -> Int {
+    var n = 0
+    while !task.is_cancelled() {
+        n += 1
+        time.sleep(2).await
+    }
+    log.push("never")
+    n
+}
+
+async fn main() {
+    let log: List<Str> = []
+    let r: Result<Int, Str> = task.scope(async |s| {
+        s.spawn(worker(log))
+        time.sleep(20).await
+        Err("early exit")
+    }).await
+    print(r)
+    print(log)
+    print(task.is_cancelled())
+}
+//> Err("early exit")
+//> ["started"]
+//> false

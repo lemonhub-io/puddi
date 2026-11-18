@@ -1,0 +1,20 @@
+// spec: 5.6
+// mode: test
+// exit: 1
+// A failing test does not stop the others; each runs in a fresh instance.
+fn add(a: Int, b: Int) -> Int { a + b }
+
+test "fails" {
+    assert_eq(add(2, 2), 5)
+}
+
+test "panics" {
+    panic("boom")
+}
+
+test "still runs" {
+    assert_eq(add(1, 2), 3)
+}
+//> test "fails" ... FAILED
+//> test "panics" ... FAILED
+//> test "still runs" ... ok

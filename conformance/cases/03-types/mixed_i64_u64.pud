@@ -1,0 +1,9 @@
+// spec: 3.7
+// mode: reject
+// No type holds both I64 and U64 losslessly.
+fn main() {
+    let a: I64 = 1
+    let b: U64 = 2
+    print(a + b)
+}
+//~ no type holds both

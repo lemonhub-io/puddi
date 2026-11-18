@@ -1,0 +1,5 @@
+// spec: 7.3 7.2
+// mode: reject
+// A git dependency needs a semver version.
+fn main() {}
+//~ needs a version

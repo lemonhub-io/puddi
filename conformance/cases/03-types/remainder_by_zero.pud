@@ -1,0 +1,9 @@
+// spec: 3.7
+// exit: 101
+// match: contains
+fn rem(a: Int, b: Int) -> Int { a % b }
+fn main() {
+    print(rem(1, 0))
+    print("unreachable")
+}
+//!~ unreachable

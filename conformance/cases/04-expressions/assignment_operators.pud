@@ -1,0 +1,30 @@
+// spec: 4.2
+fn main() {
+    var x = 10
+    x += 5;  print(x)
+    x -= 3;  print(x)
+    x *= 2;  print(x)
+    x /= 5;  print(x)
+    x %= 3;  print(x)
+    x = 12
+    x &= 10; print(x)
+    x |= 1;  print(x)
+    x ^= 3;  print(x)
+    x <<= 2; print(x)
+    x >>= 1; print(x)
+    var a = ()
+    var b = 0
+    a = b = 7                       // right associative; `b = 7` has type ()
+    print(b)
+}
+//> 15
+//> 12
+//> 24
+//> 4
+//> 1
+//> 8
+//> 9
+//> 10
+//> 40
+//> 20
+//> 7

@@ -1,0 +1,7 @@
+// spec: 4.7
+// mode: reject
+enum Shape { Circle(Float), Empty }
+fn main() {
+    let s = Shape::Empty
+}
+//~ found `:`

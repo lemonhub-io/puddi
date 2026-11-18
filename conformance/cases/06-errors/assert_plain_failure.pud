@@ -1,0 +1,9 @@
+// spec: 6.2
+// exit: 101
+// match: contains
+fn main() {
+    assert(false)
+    print("unreachable")
+}
+//> panic:
+//!~ unreachable

@@ -1,0 +1,9 @@
+// spec: 6.2
+// exit: 101
+fn main() {
+    print("start")
+    panic("something broke")
+    print("unreachable")
+}
+//> start
+//> panic: something broke

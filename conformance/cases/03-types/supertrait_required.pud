@@ -1,0 +1,7 @@
+// spec: 3.12
+// mode: reject
+trait Shape: Show { fn area(self) -> Float }
+struct Sq { s: Float }
+impl Shape for Sq { fn area(self) -> Float { 1.0 } }
+fn main() {}
+//~ Show

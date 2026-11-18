@@ -1,0 +1,49 @@
+// spec: 6.3
+enum IoErr { NotFound(Str) }
+impl Show for IoErr { fn show(self) -> Str { match self { IoErr.NotFound(p) -> "not found: {p}" } } }
+impl Error for IoErr {}
+
+struct ConfigErr { cause: IoErr }
+impl Show for ConfigErr { fn show(self) -> Str { "cannot load config" } }
+impl Error for ConfigErr {
+    fn source(self) -> Option<dyn Error> { Some(self.cause) }
+}
+
+fn read(path: Str) -> Result<Str, IoErr> { Err(IoErr.NotFound(path)) }
+fn load() -> Result<Str, AnyErr> {
+    let s = read("app.toml")?                 // IoErr -> AnyErr through std's From impl
+    Ok(s)
+}
+fn chain(e: dyn Error) -> Str {
+    var out = e.show()
+    var cur = e.source()
+    while let Some(c) = cur {
+        out = out + " <- " + c.show()
+        cur = c.source()
+    }
+    out
+}
+
+fn main() {
+    print(chain(ConfigErr { cause: IoErr.NotFound("a") }))
+    print(IoErr.NotFound("b").source().is_none())
+    match load() {
+        Ok(_) -> print("?")
+        Err(e) -> {
+            print("error: {e}")
+            match e.downcast<IoErr>() {
+                Some(io) -> print("downcast: {io}")
+                None -> print("downcast failed")
+            }
+            print(e.downcast<ConfigErr>().is_none())
+        }
+    }
+    let wrapped: AnyErr = AnyErr.from(ConfigErr { cause: IoErr.NotFound("c") })
+    print(chain(wrapped))                      // AnyErr delegates to the wrapped value
+}
+//> cannot load config <- not found: a
+//> true
+//> error: not found: app.toml
+//> downcast: not found: app.toml
+//> true
+//> cannot load config <- not found: c

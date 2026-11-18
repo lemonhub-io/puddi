@@ -1,0 +1,8 @@
+// spec: 3.13
+// mode: reject
+// Only built-in traits can be derived.
+trait Pretty { fn pretty(self) -> Str }
+@derive(Pretty)
+struct P { x: Int }
+fn main() {}
+//~ cannot derive `Pretty`

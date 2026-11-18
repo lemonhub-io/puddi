@@ -1,0 +1,19 @@
+// spec: 7.1 4.7
+import net.http                   // used as http.get(...)
+import net.http.{get, Request}    // specific names
+import net.http as h              // alias
+import net.url
+import std.math                   // standard library
+
+fn main() {
+    let a = http.get("a")
+    let b: Request = get("/b")
+    print(http.describe(a))
+    print(h.describe(b))
+    print(url.fetch_twice("c"))
+    print(math.abs(-2.5))
+}
+//> GET /a
+//> GET /b
+//> GET /c x2
+//> 2.5

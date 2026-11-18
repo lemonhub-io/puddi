@@ -1,0 +1,7 @@
+# Test programs and expected outputs are compared byte for byte.
+*.pud text eol=lf
+*.out text eol=lf
+*.err text eol=lf
+*.wit text eol=lf
+*.sh  text eol=lf
+*.ps1 text eol=crlf

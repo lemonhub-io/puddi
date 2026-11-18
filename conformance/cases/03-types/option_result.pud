@@ -1,0 +1,30 @@
+// spec: 3.10
+fn half(n: Int) -> Option<Int> { if n % 2 == 0 { Some(n / 2) } else { None } }
+fn parse(s: Str) -> Result<Int, Str> {
+    match s.parse_int() {
+        Some(n) -> Ok(n)
+        None -> Err("not a number: {s}")
+    }
+}
+fn main() {
+    print(half(4))
+    print(half(3))
+    print(parse("12"))
+    print(parse("x"))
+    let o: Option<Int> = Option.Some(5)       // variants also have full paths
+    print(o.map(|x| x * 2).unwrap_or(0))
+    print(half(3).unwrap_or(-1))
+    print(parse("7").is_ok())
+    match parse("9") {
+        Ok(v) -> print(v)
+        Err(e) -> print(e)
+    }
+}
+//> Some(2)
+//> None
+//> Ok(12)
+//> Err("not a number: x")
+//> 10
+//> -1
+//> true
+//> 9

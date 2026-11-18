@@ -1,0 +1,22 @@
+// spec: 4.7
+import std.math
+
+struct Point { x: Int, y: Int }
+impl Point {
+    fn new(x: Int, y: Int) -> Point { Point { x, y } }
+    fn origin() -> Point { Point.new(0, 0) }
+}
+enum Shape { Circle(Float), Empty }
+
+fn main() {
+    let p = Point.new(1, 2)                  // associated function
+    print(p.x + Point.origin().y)
+    let s = Shape.Circle(1.0)                // enum variant
+    match s { Shape.Circle(r) -> print(r), Shape.Empty -> print("empty") }
+    print(math.sqrt(16.0))                   // module member
+    print(Option.Some(1))
+}
+//> 1
+//> 1.0
+//> 4.0
+//> Some(1)

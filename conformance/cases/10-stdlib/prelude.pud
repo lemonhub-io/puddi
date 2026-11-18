@@ -1,0 +1,29 @@
+// spec: 10.1
+// Everything here is used without an import.
+@derive(Eq, Hash, Show)
+struct P { x: Int }
+
+fn main() {
+    let o: Option<Int> = Some(1)
+    let n: Option<Int> = None
+    let r: Result<Int, Str> = Ok(2)
+    let e: Result<Int, Str> = Err("e")
+    let l: List<Int> = [1]
+    let m: Map<Str, Int> = ["k": 1]
+    let s: Set<P> = Set.from([P { x: 1 }])
+    let c: Char = 'c'
+    let f: Float = 1.0
+    let b: Bool = true
+    let i8v: I8 = 1
+    print("{o} {n} {r} {e} {l} {m} {s.len()} {c} {f} {b} {i8v}")
+    assert(b)
+    assert_eq(P { x: 1 }, P { x: 1 })
+    print(same(l, l))
+    let err: AnyErr = AnyErr.msg("plain message")
+    print(err)
+    print(1.cmp(2))
+}
+//> Some(1) None Ok(2) Err("e") [1] ["k": 1] 1 c 1.0 true 1
+//> true
+//> plain message
+//> Less

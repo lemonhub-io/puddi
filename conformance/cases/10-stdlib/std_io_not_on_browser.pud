@@ -1,0 +1,6 @@
+// spec: 10.2
+// mode: reject
+// args: --target browser
+import std.io
+fn main() {}
+//~ std.io

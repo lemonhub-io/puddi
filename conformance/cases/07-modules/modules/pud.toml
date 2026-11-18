@@ -1,0 +1,4 @@
+[package]
+name = "modules"
+version = "0.1.0"
+puddi = "0.1"

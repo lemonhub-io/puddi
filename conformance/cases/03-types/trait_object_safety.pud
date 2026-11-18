@@ -1,0 +1,10 @@
+// spec: 3.14
+// mode: reject
+// A trait whose method has its own type parameters cannot be used as `dyn`.
+trait Visitor { fn visit<T: Show>(self, x: T) -> Str }
+struct V {}
+impl Visitor for V { fn visit<T: Show>(self, x: T) -> Str { "{x}" } }
+fn main() {
+    let v: dyn Visitor = V {}
+}
+//~ cannot be used as `dyn Visitor`

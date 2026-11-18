@@ -1,0 +1,7 @@
+// spec: 4.4
+// mode: reject
+fn main() {
+    let o: Option<Int> = None
+    let Some(v) = o else { print("no") }
+}
+//~ must not fall through

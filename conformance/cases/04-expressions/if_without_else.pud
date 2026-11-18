@@ -1,0 +1,6 @@
+// spec: 4.3
+// mode: reject
+fn main() {
+    let x: Int = if true { 1 }
+}
+//~ found `()`

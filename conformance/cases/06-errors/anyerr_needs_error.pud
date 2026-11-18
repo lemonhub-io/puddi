@@ -1,0 +1,12 @@
+// spec: 6.3
+// mode: reject
+// Only types that implement `Error` convert to AnyErr.
+struct NotAnError { x: Int }
+impl Show for NotAnError { fn show(self) -> Str { "x" } }
+fn f() -> Result<Int, NotAnError> { Err(NotAnError { x: 1 }) }
+fn g() -> Result<Int, AnyErr> {
+    let v = f()?
+    Ok(v)
+}
+fn main() {}
+//~ into `AnyErr`

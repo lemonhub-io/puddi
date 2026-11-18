@@ -1,0 +1,13 @@
+package conf:mapping;
+
+interface types {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), square(f64), none }
+  enum color { red, green }
+  flags perms { read, write, exec }
+}
+
+world plugin {
+  export scalars: func(a: bool, b: s8, c: s16, d: s64, e: u8, f: u16, g: u32, h: u64, i: f32, j: f64, k: char) -> string;
+  export collections: func(xs: list<u32>, o: option<string>, t: tuple<s32, string>) -> result<list<string>, string>;
+}

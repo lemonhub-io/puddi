@@ -1,0 +1,8 @@
+// spec: 3.11
+// mode: reject
+struct Opaque { v: Int }
+fn largest<T: Ord>(xs: List<T>) -> Option<T> { xs.first() }
+fn main() {
+    largest([Opaque { v: 1 }])
+}
+//~ does not implement `Ord`

@@ -1,0 +1,35 @@
+// spec: 2.3
+// Every keyword in its role.
+import std.math as m
+
+const LIMIT: Int = 2
+type Num = Int
+
+pub struct Box { var v: Num }
+enum E { A, B }
+trait T { fn get(self) -> Int }
+impl T for Box { fn get(self) -> Int { self.v } }
+impl Box { fn make(v: Int) -> Self { Box { v } } }
+
+async fn later(x: Int) -> Int { x }
+async fn twice(x: Int) -> Int { later(x).await * 2 }
+
+export fn exported() -> Int { 1 }
+
+fn main() {
+    let b = Box { v: 1 }
+    var n = 0
+    for i in 0..10 {
+        if i == 1 { continue }
+        if i > 3 { break }
+        n += i
+    }
+    while n < 10 { n += 1 }
+    let l = loop { break 7 }
+    let d: dyn T = b
+    let e = match E.B { E.A -> false, E.B -> true }
+    print("{n} {l} {d.get()} {e} {LIMIT} {m.PI > 3.0} {Box.make(3).get()}")
+}
+
+test "keywords" { assert(true) }
+//> 10 7 1 true 2 true 3

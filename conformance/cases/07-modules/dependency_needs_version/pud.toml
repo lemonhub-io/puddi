@@ -1,0 +1,7 @@
+[package]
+name = "needs_missing"
+version = "0.1.0"
+puddi = "0.1"
+
+[deps]
+json = "github.com/someone/puddi-json"

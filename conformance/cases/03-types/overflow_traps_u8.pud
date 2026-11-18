@@ -1,0 +1,8 @@
+// spec: 3.7
+// exit: 101
+fn main() {
+    let x: U8 = 255
+    let one: U8 = 1
+    print(x + one)
+}
+//> panic: integer overflow

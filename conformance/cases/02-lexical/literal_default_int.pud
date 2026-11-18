@@ -1,0 +1,7 @@
+// spec: 2.6
+// mode: reject
+// An unannotated integer literal defaults to `Int`, which cannot hold 2^31.
+fn main() {
+    let a = 2147483648
+}
+//~ does not fit

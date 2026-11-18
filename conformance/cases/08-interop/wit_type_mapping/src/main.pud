@@ -1,0 +1,13 @@
+// spec: 8.3
+// mode: build
+// args: --target plugin
+export fn scalars(a: Bool, b: I8, c: I16, d: I64, e: U8, f: U16, g: U32, h: U64, i: F32, j: F64, k: Char) -> Str {
+    "{a} {b} {c} {d} {e} {f} {g} {h} {i} {j} {k}"
+}
+
+export fn collections(xs: List<U32>, o: Option<Str>, t: (Int, Str)) -> Result<List<Str>, Str> {
+    match o {
+        Some(s) -> Ok([s, t.1])
+        None -> Err("none {xs.len()} {t.0}")
+    }
+}

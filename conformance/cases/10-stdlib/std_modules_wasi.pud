@@ -1,0 +1,22 @@
+// spec: 10.2
+// Every module the wasi target provides can be imported.
+import std.json
+import std.log
+import std.time
+import std.random
+import std.http
+import std.io
+import std.fs
+import std.env
+import std.math
+
+fn main() {
+    print(json.parse("[1, 2]").is_ok())
+    print(time.monotonic_ms() >= 0.0)
+    print(math.sqrt(9.0))
+    print("modules ok")
+}
+//> true
+//> true
+//> 3.0
+//> modules ok

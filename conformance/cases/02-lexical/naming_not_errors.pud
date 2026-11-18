@@ -1,0 +1,10 @@
+// spec: 2.4
+// Naming-convention violations never stop compilation, and nothing is renamed.
+fn MakeValue() -> Int { 3 }
+const answer: Int = 42
+fn main() {
+    let CamelLocal = MakeValue()
+    print(CamelLocal + answer)
+}
+//> 45
+//!~ error

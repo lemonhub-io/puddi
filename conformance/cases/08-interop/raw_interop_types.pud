@@ -1,0 +1,7 @@
+// spec: 8.4
+// mode: reject
+// Only numeric types and Str may cross a raw import.
+@extern("env", "take")
+fn take(xs: List<Int>)
+fn main() {}
+//~ cannot cross the raw WebAssembly boundary

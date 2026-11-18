@@ -1,0 +1,46 @@
+// spec: 9.4
+import std.worker
+
+@derive(Transfer, Show)
+struct Job { id: Int, data: List<Int>, tag: Option<Str> }
+
+@derive(Transfer, Show)
+enum Reply {
+    Sum(Int, Int)
+    Done
+}
+
+async fn summer(port: worker.Port<Job, Reply>) {
+    while let Some(job) = port.recv().await {
+        port.send(Reply.Sum(job.id, job.data.sum()))
+    }
+    port.send(Reply.Done)
+}
+
+async fn echo(port: worker.Port<(Str, Map<Str, Int>), Str>) {
+    while let Some((s, m)) = port.recv().await {
+        port.send("{s} {m}")
+    }
+}
+
+async fn main() {
+    let original = Job { id: 1, data: [1, 2, 3], tag: None }
+    task.scope(async |s| {
+        let w = s.worker(summer)
+        w.send(original)
+        w.send(Job { id: 2, data: [10, 20], tag: Some("x") })
+        print(w.recv().await)
+        print(w.recv().await)
+        let e = s.worker(echo)
+        e.send(("map", ["a": 1]))
+        print(e.recv().await)
+    }).await
+    original.data.push(4)                        // the worker got a deep copy
+    print(original.data)
+    print("scope ended")
+}
+//> Some(Sum(1, 6))
+//> Some(Sum(2, 30))
+//> Some("map [\"a\": 1]")
+//> [1, 2, 3, 4]
+//> scope ended

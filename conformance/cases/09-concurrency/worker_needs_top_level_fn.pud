@@ -1,0 +1,10 @@
+// spec: 9.4
+// mode: reject
+// A worker runs a top-level async function, not a closure.
+import std.worker
+async fn main() {
+    task.scope(async |s| {
+        let h = s.worker(async |port: worker.Port<Int, Int>| { port.send(1) })
+    }).await
+}
+//~ top-level async function

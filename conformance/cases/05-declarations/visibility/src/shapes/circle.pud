@@ -1,0 +1,12 @@
+pub struct Circle {
+    pub r: Float
+    id: Int
+}
+
+pub fn new(r: Float) -> Circle { Circle { r, id: next_id() } }
+
+fn next_id() -> Int { 7 }
+
+impl Circle {
+    pub fn id(self) -> Int { self.id }
+}

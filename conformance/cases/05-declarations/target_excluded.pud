@@ -1,0 +1,7 @@
+// spec: 5.5
+// mode: reject
+// A declaration for another target does not exist on this one.
+@target(browser)
+fn only_browser() -> Int { 1 }
+fn main() { print(only_browser()) }
+//~ only_browser

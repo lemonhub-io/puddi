@@ -1,0 +1,39 @@
+// spec: 4.6
+fn make_counter() -> fn() -> Int {
+    var count = 0
+    || {
+        count += 1
+        count
+    }
+}
+async fn get(x: Int) -> Int { x * 2 }
+
+async fn main() {
+    let inc = |x: Int| x + 1
+    let add = |a: Int, b: Int| -> Int { a + b }
+    print(inc(1))
+    print(add(2, 3))
+    var seen = 0
+    let observe = || seen
+    seen = 9                                 // closure sees later assignments
+    print(observe())
+    let set = |v: Int| { seen = v }          // and can assign to the binding
+    set(42)
+    print(seen)
+    let c = make_counter()
+    c()
+    c()
+    print(c())
+    let fetch = async |x| { get(x).await + 1 }
+    print(fetch(20).await)
+    let fs: List<fn() -> Int> = []
+    for i in 0..3 { fs.push(|| i * 10) }
+    print(fs.map(|f| f()))
+}
+//> 2
+//> 5
+//> 9
+//> 42
+//> 3
+//> 41
+//> [0, 10, 20]

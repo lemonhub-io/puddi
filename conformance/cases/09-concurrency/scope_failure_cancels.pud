@@ -1,0 +1,33 @@
+// spec: 9.2 9.3
+import std.time
+
+async fn forever(log: List<Str>) -> Int {
+    var i = 0
+    loop {
+        time.sleep(5).await
+        i += 1
+        if i > 2000 { log.push("ran to the end"); return 0 }
+    }
+}
+async fn failing() -> Result<Int, Str> {
+    time.sleep(20).await
+    Err("boom")
+}
+
+async fn main() {
+    let log: List<Str> = []
+    let t0 = time.monotonic_ms()
+    let r: Result<Int, Str> = task.scope(async |s| {
+        let _bg = s.spawn(forever(log))
+        let f = s.spawn(failing())
+        let v = f.await?                         // the body fails, so `forever` is cancelled
+        Ok(v)
+    }).await
+    let took = time.monotonic_ms() - t0
+    print(r)
+    print("cancelled quickly: {took < 2000.0}")
+    print(log)
+}
+//> Err("boom")
+//> cancelled quickly: true
+//> []

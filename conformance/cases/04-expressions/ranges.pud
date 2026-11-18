@@ -1,0 +1,20 @@
+// spec: 4.2 4.5
+fn main() {
+    var s = ""
+    for i in 0..4 { s = s + "{i}" }
+    print(s)
+    s = ""
+    for i in 0..=4 { s = s + "{i}" }
+    print(s)
+    s = ""
+    for i in 3..3 { s = s + "{i}" }
+    print(s.is_empty())
+    let n = 2
+    var t = 0
+    for i in n * 2..n * 2 + 3 { t += i }   // `..` binds looser than arithmetic
+    print(t)
+}
+//> 0123
+//> 01234
+//> true
+//> 15

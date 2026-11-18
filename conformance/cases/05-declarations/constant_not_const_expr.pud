@@ -1,0 +1,6 @@
+// spec: 5.3
+// mode: reject
+fn compute() -> Int { 3 }
+const X: Int = compute()
+fn main() { print(X) }
+//~ constant expressions

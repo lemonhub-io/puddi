@@ -1,0 +1,7 @@
+// spec: 9.1
+// mode: reject
+async fn get() -> Int { 1 }
+async fn main() {
+    let f = || get().await
+}
+//~ `.await` is only allowed inside `async` functions

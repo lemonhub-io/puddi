@@ -1,0 +1,8 @@
+// spec: 2.8
+// mode: reject
+struct Opaque { x: Int }
+fn main() {
+    let o = Opaque { x: 1 }
+    print("{o}")
+}
+//~ does not implement `Show`

@@ -1,0 +1,6 @@
+// spec: 10.2
+// mode: reject
+// args: --target browser
+import std.fs
+fn main() {}
+//~ std.fs

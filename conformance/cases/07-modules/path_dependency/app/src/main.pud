@@ -1,0 +1,10 @@
+// spec: 7.3 7.1
+import util
+import util.text.case
+
+fn main() {
+    print(util.twice(21))
+    print(case.shout("hi"))
+}
+//> 42
+//> HI!

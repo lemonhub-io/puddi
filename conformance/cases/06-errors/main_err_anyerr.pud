@@ -1,0 +1,12 @@
+// spec: 6.4 6.3
+// exit: 1
+enum MyErr { Broken }
+impl Show for MyErr { fn show(self) -> Str { "it broke" } }
+impl Error for MyErr {}
+fn work() -> Result<Int, MyErr> { Err(MyErr.Broken) }
+async fn main() -> Result<(), AnyErr> {
+    let v = work()?
+    print(v)
+    Ok(())
+}
+//> error: it broke

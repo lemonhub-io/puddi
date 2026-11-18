@@ -1,0 +1,7 @@
+import net.url
+
+pub struct Request { pub path: Str }
+
+pub fn get(path: Str) -> Request { Request { path: url.clean(path) } }
+
+pub fn describe(r: Request) -> Str { "GET {r.path}" }

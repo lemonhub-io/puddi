@@ -1,0 +1,12 @@
+// spec: 2.4
+// mode: check
+// xfail: the compiler does not warn on naming-convention violations yet
+// Naming convention violations are warnings, not errors.
+struct bad_type { x: Int }
+fn BadFunction() {}
+const lower_const: Int = 1
+fn main() {
+    let BadLocal = 1
+    BadFunction()
+}
+//~ warning

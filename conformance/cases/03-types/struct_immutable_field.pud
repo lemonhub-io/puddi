@@ -1,0 +1,8 @@
+// spec: 3.3 4.1
+// mode: reject
+struct Point { x: Int, var y: Int }
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    p.x = 5
+}
+//~ cannot assign to field `x`: it is immutable

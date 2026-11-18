@@ -1,0 +1,7 @@
+// spec: 8.1 8.2
+// args: --target plugin
+// prog-args: greet puddi
+// match: contains
+export fn add(a: Int, b: Int) -> Int { a + b }
+export fn greet(name: Str) -> Str { "hello {name}" }
+//> hello puddi

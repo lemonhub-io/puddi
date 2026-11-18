@@ -1,0 +1,21 @@
+// spec: 3.5
+fn swap(t: (Int, Str)) -> (Str, Int) { (t.1, t.0) }
+fn unit() -> () { () }
+
+fn main() {
+    let t = (1, "a")
+    print(t.0)
+    print(t.1)
+    print(swap(t))
+    let nested = ((1, 2), (3, (4, 5)))
+    print(nested.1.1.0)
+    let u = unit()
+    print(u == ())
+    print(())
+}
+//> 1
+//> a
+//> ("a", 1)
+//> 4
+//> true
+//> ()

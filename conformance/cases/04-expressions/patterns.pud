@@ -1,0 +1,111 @@
+// spec: 4.4
+struct Point { x: Int, y: Int }
+enum Shape {
+    Circle(Float)
+    Rect { w: Float, h: Float }
+    Empty
+}
+
+fn classify(c: Char) -> Str {
+    match c {
+        'a'..='z' -> "lower"
+        'A' | 'E' | 'I' | 'O' | 'U' -> "vowel"
+        'A'..='Z' -> "upper"
+        _ -> "other"
+    }
+}
+fn shape(s: Shape) -> Str {
+    match s {
+        Shape.Circle(r) if r > 10.0 -> "big circle"
+        Shape.Circle(_) -> "circle"
+        Shape.Rect { w, h } -> "rect {w}x{h}"
+        Shape.Empty -> "nothing"
+    }
+}
+fn point(p: Point) -> Str {
+    match p {
+        Point { x: 0, y: 0 } -> "origin"
+        Point { x, y: 0 } -> "on x axis at {x}"
+        Point { x: 0, .. } -> "on y axis"
+        Point { x, y } -> "({x}, {y})"
+    }
+}
+fn list(xs: List<Int>) -> Str {
+    match xs {
+        [] -> "empty"
+        [x] -> "one {x}"
+        [first, ..rest] -> "first {first}, {rest.len()} more"
+    }
+}
+fn word(s: Str) -> Int {
+    match s {
+        "one" -> 1
+        "two" -> 2
+        _ -> 0
+    }
+}
+fn find(id: Int) -> Option<Str> { if id == 1 { Some("ada") } else { None } }
+fn greet(id: Int) -> Str {
+    let Some(name) = find(id) else { return "nobody" }
+    "hi {name}"
+}
+
+fn main() {
+    print(classify('q'))
+    print(classify('E'))
+    print(classify('Q'))
+    print(classify('7'))
+    print(shape(Shape.Circle(11.0)))
+    print(shape(Shape.Circle(1.0)))
+    print(shape(Shape.Rect { w: 1.5, h: 2.0 }))
+    print(shape(Shape.Empty))
+    print(point(Point { x: 0, y: 0 }))
+    print(point(Point { x: 3, y: 0 }))
+    print(point(Point { x: 0, y: 3 }))
+    print(point(Point { x: 1, y: 2 }))
+    print(list([]))
+    print(list([4]))
+    print(list([4, 5, 6]))
+    print(word("two") + word("zzz"))
+    let (a, _, c) = (1, 2, 3)
+    print(a + c)
+    let Point { x, y } = Point { x: 7, y: 8 }
+    print(x * y)
+    if let Some(n) = find(1) { print(n) }
+    if let Some(n) = find(2) { print(n) } else { print("none") }
+    print(greet(1))
+    print(greet(2))
+    for (i, (k, v)) in [("a", 1), ("b", 2)].enumerate() { print("{i}:{k}={v}") }
+    match true { true -> print("true literal"), false -> print("false literal") }
+    match (1, "x") {
+        (0, _) -> print("zero")
+        (n, s) if n > 0 -> print("{n}{s}")
+        _ -> print("neg")
+    }
+}
+//> lower
+//> vowel
+//> upper
+//> other
+//> big circle
+//> circle
+//> rect 1.5x2.0
+//> nothing
+//> origin
+//> on x axis at 3
+//> on y axis
+//> (1, 2)
+//> empty
+//> one 4
+//> first 4, 2 more
+//> 2
+//> 4
+//> 56
+//> ada
+//> none
+//> hi ada
+//> nobody
+//> 0:a=1
+//> 1:b=2
+//> true literal
+//> 1x

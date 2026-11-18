@@ -1,0 +1,28 @@
+// spec: 3.3
+struct Point {
+    x: Int
+    var y: Int
+}
+
+struct Pair<A, B> { a: A, b: B }
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    let x = 7
+    let y = 8
+    let q = Point { x, y }            // shorthand
+    let r = Point { x: 5, ..p }       // update syntax
+    p.y = 20                          // var field
+    print("{p.x} {p.y}")
+    print("{q.x} {q.y}")
+    print("{r.x} {r.y}")
+    let pr = Pair { a: "one", b: 1.5 }
+    print("{pr.a} {pr.b}")
+    let nested = Pair { a: Pair { a: 1, b: 2 }, b: [p] }
+    print(nested.a.b + nested.b[0].y)
+}
+//> 1 20
+//> 7 8
+//> 5 2
+//> one 1.5
+//> 22

@@ -1,0 +1,7 @@
+// spec: 5.2
+// mode: reject
+struct P { x: Int }
+fn main() {
+    P { x: 1 }.missing()
+}
+//~ no method named `missing`

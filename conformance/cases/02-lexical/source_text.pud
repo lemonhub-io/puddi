@@ -1,0 +1,11 @@
+// spec: 2.1
+// Identifiers follow UAX #31; `_` alone is the wildcard, not an identifier.
+fn main() {
+    let größe = 3
+    let 名前 = "puddi"
+    let café_2 = größe + 1
+    let _ = café_2
+    let (_, second) = (1, 2)
+    print("{größe} {名前} {café_2} {second}")
+}
+//> 3 puddi 4 2

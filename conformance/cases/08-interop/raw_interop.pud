@@ -1,0 +1,16 @@
+// spec: 8.4 5.5
+// mode: build
+// args: --target browser --emit-wat
+@extern("env", "log_num")
+fn log_num(n: Int)
+
+@extern("env", "log_text")
+fn log_text(msg: Str)
+
+@export("run")
+fn run() {
+    log_num(1)
+    log_text("hi")
+}
+
+fn main() {}

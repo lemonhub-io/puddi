@@ -1,0 +1,24 @@
+// spec: 9.1
+struct User { id: Int, name: Str }
+async fn fetch_user(id: Int) -> Result<User, Str> {
+    if id < 0 { return Err("bad id {id}") }
+    Ok(User { id, name: "user{id}" })
+}
+async fn name_of(id: Int) -> Result<Str, Str> {
+    let u = fetch_user(id).await?               // `.await` binds before `?`
+    Ok(u.name)
+}
+async fn main() {
+    print(name_of(3).await)
+    print(name_of(-1).await)
+    let lazy = fetch_user(7)                    // a future does nothing until awaited
+    print("created")
+    print(lazy.await.unwrap().id)
+    let add = async |a: Int, b: Int| a + b
+    print(add(2, 3).await)
+}
+//> Ok("user3")
+//> Err("bad id -1")
+//> created
+//> 7
+//> 5

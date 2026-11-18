@@ -1,0 +1,6 @@
+// spec: 9.1
+// mode: reject
+async fn get() -> Int { 1 }
+fn sync_caller() -> Int { get().await }
+fn main() {}
+//~ `.await` is only allowed inside `async` functions

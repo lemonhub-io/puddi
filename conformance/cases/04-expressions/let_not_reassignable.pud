@@ -1,0 +1,7 @@
+// spec: 4.1
+// mode: reject
+fn main() {
+    let a = 1
+    a = 2
+}
+//~ cannot assign twice to `a`: it is declared with `let`

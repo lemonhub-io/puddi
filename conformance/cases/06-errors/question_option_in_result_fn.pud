@@ -1,0 +1,9 @@
+// spec: 6.1
+// mode: reject
+// `?` on Option is allowed only in functions returning Option.
+fn f(xs: List<Int>) -> Result<Int, Str> {
+    let x = xs.first()?
+    Ok(x)
+}
+fn main() {}
+//~ can only be used in a function that returns `Option`

@@ -1,0 +1,7 @@
+// spec: 8.1
+// mode: build
+// args: --target browser
+async fn main() {
+    print("browser entry")
+}
+export fn exported(n: Int) -> Int { n + 1 }

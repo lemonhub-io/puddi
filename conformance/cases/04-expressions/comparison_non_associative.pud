@@ -1,0 +1,9 @@
+// spec: 4.2
+// mode: reject
+fn main() {
+    let a = 1
+    let b = 2
+    let c = 3
+    print(a < b < c)
+}
+//~ cannot be chained

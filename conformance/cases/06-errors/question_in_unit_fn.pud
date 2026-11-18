@@ -1,0 +1,8 @@
+// spec: 6.1
+// mode: reject
+fn a() -> Result<Int, Str> { Err("x") }
+fn b() {
+    let v = a()?
+}
+fn main() {}
+//~ can only be used in a function that returns `Result`

@@ -1,0 +1,16 @@
+// spec: 8.3 8.2
+// xfail: export glue does not qualify record, variant, enum and flags types that the world `use`s from an interface
+// mode: build
+// args: --target plugin
+import conf:mapping/types
+
+export fn records(p: types.Point, s: types.Shape, c: types.Color, f: types.Perms) -> types.Point {
+    let dx = match s {
+        types.Shape.Circle(r) -> r.round_to_int()
+        types.Shape.Square(w) -> w.round_to_int()
+        types.Shape.None -> 0
+    }
+    let dy = match c { types.Color.Red -> 1, types.Color.Green -> 2 }
+    let flags = (if f.read { 1 } else { 0 }) + (if f.write { 2 } else { 0 }) + (if f.exec { 4 } else { 0 })
+    types.Point { x: p.x + dx, y: p.y + dy + flags }
+}

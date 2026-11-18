@@ -1,0 +1,20 @@
+// spec: 2.8
+struct P { x: Int }
+impl Show for P { fn show(self) -> Str { "P({self.x})" } }
+
+fn main() {
+    let name = "ada"
+    let count = 2
+    print("hi {name}, you have {count + 1} messages")
+    print("a literal \{brace\}")
+    print("tab:\t|quote:\"|apos:\'|backslash:\\|")
+    print("nul is {"\0".utf8_len()} byte, cr is {"\r".utf8_len()} byte")
+    print("\u{48}\u{49} \u{1F600}")
+    print("nested {"inner {count}"} and {P { x: 4 }}")
+}
+//> hi ada, you have 3 messages
+//> a literal {brace}
+//> tab:	|quote:"|apos:'|backslash:\|
+//> nul is 1 byte, cr is 1 byte
+//> HI 😀
+//> nested inner 2 and P(4)

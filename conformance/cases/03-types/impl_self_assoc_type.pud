@@ -1,0 +1,17 @@
+// spec: 3.12
+// xfail: `Self.Item` does not resolve inside an impl block
+// `Self.Item` names the associated type inside an impl, as it does in the trait.
+struct Countdown { var n: Int }
+impl Iterator for Countdown {
+    type Item = Int
+    fn next(self) -> Option<Self.Item> {
+        if self.n == 0 { return None }
+        self.n -= 1
+        Some(self.n + 1)
+    }
+}
+fn main() {
+    let c = Countdown { n: 2 }
+    print(c.next())
+}
+//> Some(2)

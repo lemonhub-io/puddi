@@ -1,0 +1,17 @@
+// spec: 4.1
+@derive(Eq)
+struct P { x: Int }
+fn main() {
+    let a = P { x: 1 }
+    let b = P { x: 1 }
+    print(a == b)                       // compares through Eq
+    print(same(a, b))                   // reference identity
+    print(same(a, a))
+    print([1, 2] == [1, 2])
+    print(same([1], [1]))
+}
+//> true
+//> false
+//> true
+//> true
+//> false

@@ -1,0 +1,12 @@
+// spec: 5.4
+// mode: reject
+// Private functions and fields are not visible from other modules.
+import lib2
+
+fn main() {
+    print(lib2.hidden())
+    let t = lib2.make()
+    print(t.secret)
+}
+//~ hidden
+//~ secret

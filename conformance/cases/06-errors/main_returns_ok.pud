@@ -1,0 +1,8 @@
+// spec: 6.4
+struct E {}
+impl Show for E { fn show(self) -> Str { "e" } }
+fn main() -> Result<(), E> {
+    print("fine")
+    Ok(())
+}
+//> fine

@@ -1,0 +1,7 @@
+// spec: 3.7
+// mode: reject
+fn main() {
+    let y: I64 = 5
+    let z: Int = y
+}
+//~ mismatched types: expected `Int`, found `I64`

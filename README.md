@@ -18,6 +18,30 @@ fn main() {
 }
 ```
 
+## Install
+
+macOS and Linux (x86_64 and arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/puddi-lang/puddi/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/puddi-lang/puddi/main/install.ps1 | iex
+```
+
+The scripts download the latest [release](https://github.com/puddi-lang/puddi/releases), verify its SHA-256 checksum, put `pud` in `~/.pud/bin` and add that directory to `PATH`. Set `PUD_VERSION=v0.1.0` to pin a release, `PUD_INSTALL` to change the directory, or `PUD_NO_MODIFY_PATH=1` to leave `PATH` alone. Run the script again to upgrade.
+
+From source (current stable Rust):
+
+```sh
+cargo install --locked --git https://github.com/puddi-lang/puddi --tag v0.1.0
+```
+
+`pud test` and the browser target also need Node.js 22 or newer.
+
 ## The `pud` toolchain
 
 `pud` is written in Rust. It compiles Puddi to WasmGC and packages every target as a WebAssembly component: the `browser` component comes with JavaScript loader glue, and `wasi` components run in the embedded Wasmtime.
@@ -92,8 +116,11 @@ Limitations:
 ## Tests
 
 ```sh
-cargo test      # runs every program in tests/run and checks diagnostics for tests/fail
+cargo test      # regression tests in tests/run and tests/fail, plus the conformance suite
+node conformance/run.mjs --coverage   # the conformance suite alone, with a per-section report
 ```
+
+The [conformance suite](conformance/README.md) checks the toolchain against SPEC.md: every case names the spec sections it verifies, and every normative section has passing cases. Cases marked `xfail` record where the compiler still differs from the spec.
 
 ## License
 

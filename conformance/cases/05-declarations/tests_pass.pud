@@ -1,0 +1,20 @@
+// spec: 5.6
+// mode: test
+fn add(a: Int, b: Int) -> Int { a + b }
+async fn later(x: Int) -> Int { x }
+
+test "addition works" {
+    assert_eq(add(2, 2), 4)
+}
+
+test "test bodies may await" {
+    assert_eq(later(5).await, 5)
+}
+
+test "assert" {
+    assert(add(1, 1) == 2)
+}
+//> running 3 tests
+//> test "addition works" ... ok
+//> test "test bodies may await" ... ok
+//> test "assert" ... ok

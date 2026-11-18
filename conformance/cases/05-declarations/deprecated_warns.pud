@@ -1,0 +1,8 @@
+// spec: 5.5
+// mode: check
+@deprecated("use new_api")
+fn old_api() -> Int { 1 }
+fn main() { print(old_api()) }
+//~ warning
+//~ `old_api` is deprecated
+//~ use new_api

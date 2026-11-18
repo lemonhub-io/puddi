@@ -1,0 +1,10 @@
+// spec: 4.4
+// mode: reject
+fn main() {
+    let o: Option<Int> = Some(1)
+    match o {
+        Some(x) if x > 0 -> print(x)
+        None -> print("none")
+    }
+}
+//~ non-exhaustive match

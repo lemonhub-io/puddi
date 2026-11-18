@@ -1,0 +1,28 @@
+// spec: 3.8
+fn main() {
+    let s = "héllo wörld"
+    print(s.chars().count())
+    print(s.utf8_len())
+    print("e\u{301}a".graphemes().count())
+    print("e\u{301}a".chars().count())
+    var acc = ""
+    for c in "abc".chars() { acc = acc + c.to_str() + "." }
+    print(acc)
+    match s.find("w") {
+        Some(i) -> print(s.slice_from(i))
+        None -> print("missing")
+    }
+    let t = "key=value"
+    let eq = t.find("=").unwrap()
+    let end = t.find("e").unwrap()
+    print(t.slice(end, eq))
+    print(s.find("zzz").is_none())
+}
+//> 11
+//> 13
+//> 2
+//> 3
+//> a.b.c.
+//> wörld
+//> ey
+//> true

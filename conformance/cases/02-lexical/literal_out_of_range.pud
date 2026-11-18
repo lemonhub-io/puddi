@@ -1,0 +1,6 @@
+// spec: 2.6
+// mode: reject
+fn main() {
+    let a: I8 = 128
+}
+//~ does not fit

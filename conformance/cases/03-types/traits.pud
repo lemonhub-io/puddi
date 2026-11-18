@@ -1,0 +1,60 @@
+// spec: 3.12
+trait Shape: Show {
+    fn area(self) -> Float
+    fn describe(self) -> Str { "{self.show()} with area {self.area()}" }   // default method
+}
+
+struct Sq { s: Float }
+impl Show for Sq { fn show(self) -> Str { "square({self.s})" } }
+impl Shape for Sq { fn area(self) -> Float { self.s * self.s } }
+
+struct Big { s: Float }
+impl Show for Big { fn show(self) -> Str { "big" } }
+impl Shape for Big {
+    fn area(self) -> Float { 1000.0 }
+    fn describe(self) -> Str { "overridden" }
+}
+
+struct Countdown { var n: Int }
+impl Iterator for Countdown {
+    type Item = Int                                  // associated type
+    fn next(self) -> Option<Int> {
+        if self.n == 0 { return None }
+        self.n -= 1
+        Some(self.n + 1)
+    }
+}
+
+trait Named {
+    fn name(self) -> Str
+    fn make(n: Str) -> Self                          // `Self` is the implementing type
+}
+struct Dog { n: Str }
+impl Named for Dog {
+    fn name(self) -> Str { self.n }
+    fn make(n: Str) -> Self { Dog { n } }
+}
+fn create<T: Named>(n: Str) -> T { T.make(n) }
+
+fn total_area<T: Shape>(xs: List<T>) -> Float { xs.map(|x| x.area()).sum() }
+
+fn main() {
+    print(Sq { s: 2.0 }.describe())
+    print(Big { s: 1.0 }.describe())
+    let c = Countdown { n: 3 }
+    print(c.next())
+    print(c.next())
+    print(c.next())
+    print(c.next())
+    let d: Dog = create("rex")
+    print(d.name())
+    print(total_area([Sq { s: 1.0 }, Sq { s: 3.0 }]))
+}
+//> square(2.0) with area 4.0
+//> overridden
+//> Some(3)
+//> Some(2)
+//> Some(1)
+//> None
+//> rex
+//> 10.0

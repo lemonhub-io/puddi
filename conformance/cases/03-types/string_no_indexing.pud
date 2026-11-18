@@ -1,0 +1,7 @@
+// spec: 3.8
+// mode: reject
+fn main() {
+    let s = "abc"
+    print(s[0])
+}
+//~ `index`

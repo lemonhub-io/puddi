@@ -1,0 +1,5 @@
+// spec: 3.9
+// mode: reject
+fn add(v: ListView<Int>) { v.push(1) }
+fn main() { add([1]) }
+//~ no method named `push`

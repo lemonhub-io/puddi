@@ -1,0 +1,5 @@
+// spec: 10.2
+// mode: reject
+import std.dom
+fn main() {}
+//~ std.dom

@@ -1,0 +1,23 @@
+// spec: 3.1
+fn area(w: Int, h: Int) -> Int {
+    let s = w * h          // inferred Int
+    s
+}
+fn nothing() { 42 }        // missing return type means ()
+fn twice(f: fn(Int) -> Int, x: Int) -> Int { f(f(x)) }
+
+fn main() {
+    let xs = [1.5, 2.5]    // List<Float>
+    let m = [:]
+    m.insert("k", 1)       // Map<Str, Int> inferred from later use
+    print(area(3, 4))
+    print(xs.sum())
+    print(twice(|x| x * 2, 21)) // closure parameter inferred from the expected type
+    print(m)
+    print(nothing() == ())
+}
+//> 12
+//> 4.0
+//> 84
+//> ["k": 1]
+//> true

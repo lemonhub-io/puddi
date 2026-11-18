@@ -1,0 +1,6 @@
+// spec: 3.1
+// mode: reject
+// Top-level parameter types must be written out.
+fn double(x) -> Int { x * 2 }
+fn main() { print(double(2)) }
+//~ parameter type

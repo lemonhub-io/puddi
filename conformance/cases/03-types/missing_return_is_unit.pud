@@ -1,0 +1,7 @@
+// spec: 3.1
+// mode: reject
+fn f() { }
+fn main() {
+    let x: Int = f()
+}
+//~ mismatched types: expected `Int`, found `()`

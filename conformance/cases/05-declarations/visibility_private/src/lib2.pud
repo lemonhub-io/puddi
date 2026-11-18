@@ -1,0 +1,6 @@
+pub struct Token {
+    pub kind: Int
+    secret: Str
+}
+pub fn make() -> Token { Token { kind: 1, secret: "s" } }
+fn hidden() -> Int { 42 }

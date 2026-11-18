@@ -1,0 +1,25 @@
+// spec: 3.7
+fn shrink(v: I64) -> Option<Int> {
+    let c: Int = v.to_int()?
+    Some(c + 1)
+}
+fn main() {
+    print(shrink(41))
+    print(shrink(10000000000))
+    print(300.to_u8())
+    print(200.to_u8())
+    print((-1).to_u32())
+    print(2.7.truncate_to_int())
+    print(2.5.round_to_int())
+    print(256.wrap_to_u8())
+    print(257.wrap_to_u8())
+}
+//> Some(42)
+//> None
+//> None
+//> Some(200)
+//> None
+//> 2
+//> 3
+//> 0
+//> 1

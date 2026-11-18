@@ -1,0 +1,7 @@
+// spec: 2.3
+// mode: reject
+// Keywords cannot be used as identifiers.
+fn main() {
+    let match = 3
+}
+//~ found `match`

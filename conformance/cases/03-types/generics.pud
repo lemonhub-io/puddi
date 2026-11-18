@@ -1,0 +1,34 @@
+// spec: 3.11
+fn largest<T: Ord>(xs: List<T>) -> Option<T> {
+    var best = xs.first()?
+    for x in xs { if x > best { best = x } }
+    Some(best)
+}
+fn describe<T: Show + Eq>(a: T, b: T) -> Str { "{a} {if a == b { "==" } else { "!=" }} {b}" }
+fn empty<T>() -> List<T> { [] }
+
+struct Stack<T> { var items: List<T> }
+impl<T> Stack<T> {
+    fn push(self, x: T) { self.items.push(x) }
+    fn pop(self) -> Option<T> { self.items.pop() }
+}
+
+fn main() {
+    print(largest([3, 9, 2]))
+    print(largest(["pear", "apple"]))
+    print(largest(empty<Int>()))           // explicit type argument
+    print(describe(1, 1))
+    print(describe("a", "b"))
+    let s = Stack { items: [1] }
+    s.push(2)
+    print(s.pop())
+    let t: Stack<Str> = Stack { items: [] }
+    print(t.pop())
+}
+//> Some(9)
+//> Some("pear")
+//> None
+//> 1 == 1
+//> a != b
+//> Some(2)
+//> None

@@ -1,0 +1,11 @@
+// spec: 9.4
+// mode: reject
+import std.worker
+struct Plain { x: Int }
+async fn w(port: worker.Port<Plain, Int>) {}
+async fn main() {
+    task.scope(async |s| {
+        let h = s.worker(w)
+    }).await
+}
+//~ Transfer

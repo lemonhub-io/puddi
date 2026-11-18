@@ -1,0 +1,10 @@
+// spec: 5.4 7.1
+import shapes.circle
+
+fn main() {
+    let c = circle.new(2.0)
+    print(c.r)
+    print(c.id())
+}
+//> 2.0
+//> 7

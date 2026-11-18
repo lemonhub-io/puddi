@@ -1,0 +1,7 @@
+// spec: 9.4
+// mode: reject
+// Function values are never Transfer.
+@derive(Transfer)
+struct Job { f: fn() -> Int }
+fn main() {}
+//~ Transfer

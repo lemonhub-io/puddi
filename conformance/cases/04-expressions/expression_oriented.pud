@@ -1,0 +1,28 @@
+// spec: 4.1 4.3
+// Blocks, if, match and loop produce values; assignment has type ().
+fn pick(n: Int) -> Str {
+    let r = {
+        let doubled = n * 2
+        doubled + 1
+    }
+    let label = if r > 5 { "big" } else { "small" }
+    "{r} {label}"
+}
+fn unit_body() {
+    let x = 1
+    x + 1               // discarded: the expected type is ()
+}
+fn main() {
+    print(pick(1))
+    print(pick(5))
+    var a = 0
+    let r = (a = 5)
+    print(r == ())
+    print(a)
+    print(unit_body() == ())
+}
+//> 3 small
+//> 11 big
+//> true
+//> 5
+//> true

@@ -1,0 +1,23 @@
+// spec: 3.6
+fn double(x: Int) -> Int { x * 2 }
+fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int) -> fn(Int) -> Int { |x| g(f(x)) }
+async fn shout(n: Int) -> Str { "n={n}" }
+async fn call(f: async fn(Int) -> Str) -> Str { f(3).await }
+
+async fn main() {
+    print(apply(double, 5))              // named function
+    print(apply(|x| x + 1, 5))           // closure
+    let h = compose(double, |x| x - 1)
+    print(h(10))
+    let fs: List<fn(Int) -> Int> = [double, |x| x * x]
+    print(fs.map(|f| f(4)))
+    print(call(shout).await)
+    print(call(async |n| "closure {n}").await)
+}
+//> 10
+//> 6
+//> 19
+//> [8, 16]
+//> n=3
+//> closure 3

@@ -1,0 +1,23 @@
+// spec: 3.7
+fn main() {
+    print(-17 / 5)          // truncates toward zero
+    print(-17 % 5)          // sign of the dividend
+    print(17 % -5)
+    let x: U8 = 200
+    print(x.wrapping_add(100))
+    print(x.saturating_add(100))
+    print(x.checked_add(100))
+    print(x.checked_add(5))
+    let big: I64 = 9223372036854775807
+    print(big.checked_add(1))
+    print(2147483647.wrapping_add(1))
+}
+//> -3
+//> -2
+//> 2
+//> 44
+//> 255
+//> None
+//> Some(205)
+//> None
+//> -2147483648

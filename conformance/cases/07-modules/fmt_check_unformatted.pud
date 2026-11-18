@@ -1,0 +1,6 @@
+// spec: 7.4
+// mode: fmt
+// args: --check
+// exit: 1
+fn main(){let x=1
+  print(x)}

@@ -1,0 +1,9 @@
+// spec: 4.5
+// mode: reject
+fn main() {
+    for i in 0..3 {
+        let x: Int = 1
+    }
+    break
+}
+//~ outside of a loop

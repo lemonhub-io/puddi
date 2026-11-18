@@ -1,0 +1,13 @@
+// spec: 3.12
+trait Source {
+    async fn read(self) -> Str
+}
+struct Fixed { text: Str }
+impl Source for Fixed {
+    async fn read(self) -> Str { self.text }
+}
+async fn both<T: Source>(a: T, b: T) -> Str { a.read().await + b.read().await }
+async fn main() {
+    print(both(Fixed { text: "a" }, Fixed { text: "b" }).await)
+}
+//> ab

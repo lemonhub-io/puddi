@@ -1,0 +1,6 @@
+// spec: 3.10
+// mode: reject
+fn main() {
+    let x: Int = null
+}
+//~ `null`

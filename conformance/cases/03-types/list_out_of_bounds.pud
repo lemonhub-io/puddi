@@ -1,0 +1,7 @@
+// spec: 3.9 6.2
+// exit: 101
+fn main() {
+    let xs = [1, 2, 3]
+    print(xs[5])
+}
+//> panic: index 5 out of bounds for list of length 3

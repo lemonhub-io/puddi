@@ -1,0 +1,32 @@
+// spec: 4.3
+struct P { x: Int }
+fn sign(x: Int) -> Int { if x > 0 { 1 } else if x < 0 { -1 } else { 0 } }
+fn label(code: Int) -> Str {
+    match code {
+        200 -> "ok"
+        404 -> "not found"
+        500..=599 -> "server error"
+        _ -> "other"
+    }
+}
+fn main() {
+    print("{sign(5)} {sign(-5)} {sign(0)}")
+    print(label(200))
+    print(label(404))
+    print(label(503))
+    print(label(302))
+    let r = if true { print("side effect") }    // `if` without `else` has type ()
+    print(r == ())
+    if (P { x: 1 }).x == 1 { print("parenthesized struct literal") }
+    let v = match (P { x: 2 }) { P { x } -> x * 10 }
+    print(v)
+}
+//> 1 -1 0
+//> ok
+//> not found
+//> server error
+//> other
+//> side effect
+//> true
+//> parenthesized struct literal
+//> 20

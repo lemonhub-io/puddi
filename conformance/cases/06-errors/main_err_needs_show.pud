@@ -1,0 +1,5 @@
+// spec: 6.4
+// mode: reject
+struct Opaque {}
+fn main() -> Result<(), Opaque> { Ok(()) }
+//~ Show

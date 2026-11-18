@@ -1,0 +1,13 @@
+package conf:mapping;
+
+interface types {
+  record point { x: s32, y: s32 }
+  variant shape { circle(f64), square(f64), none }
+  enum color { red, green }
+  flags perms { read, write, exec }
+}
+
+world plugin {
+  use types.{point, shape, color, perms};
+  export records: func(p: point, s: shape, c: color, f: perms) -> point;
+}

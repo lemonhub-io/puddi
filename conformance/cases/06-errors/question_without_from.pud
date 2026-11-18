@@ -1,0 +1,11 @@
+// spec: 6.1
+// mode: reject
+enum A { X }
+enum B { Y }
+fn a() -> Result<Int, A> { Err(A.X) }
+fn b() -> Result<Int, B> {
+    let v = a()?
+    Ok(v)
+}
+fn main() {}
+//~ cannot convert the error type `A` into `B`

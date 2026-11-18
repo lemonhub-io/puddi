@@ -1,0 +1,9 @@
+[package]
+name = "manifest-demo"
+version = "1.2.3"
+puddi = "0.1"
+
+[deps]
+
+[target.wasi]
+world = "wasi:cli/command"

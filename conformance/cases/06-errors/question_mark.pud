@@ -1,0 +1,70 @@
+// spec: 6.1
+enum ParseErr { Empty, Bad(Str) }
+impl Show for ParseErr {
+    fn show(self) -> Str {
+        match self {
+            ParseErr.Empty -> "empty"
+            ParseErr.Bad(s) -> "bad {s}"
+        }
+    }
+}
+enum AppErr { Parse(ParseErr), TooBig(Int) }
+impl Show for AppErr {
+    fn show(self) -> Str {
+        match self {
+            AppErr.Parse(e) -> "parse: {e}"
+            AppErr.TooBig(n) -> "too big: {n}"
+        }
+    }
+}
+impl From<ParseErr> for AppErr {
+    fn from(e: ParseErr) -> AppErr { AppErr.Parse(e) }
+}
+
+fn parse(s: Str) -> Result<Int, ParseErr> {
+    if s.is_empty() { return Err(ParseErr.Empty) }
+    s.parse_int().ok_or(ParseErr.Bad(s))
+}
+fn check(s: Str) -> Result<Int, AppErr> {
+    let n = parse(s)?                    // ParseErr converted through From
+    if n > 100 { return Err(AppErr.TooBig(n)) }
+    Ok(n * 2)
+}
+fn same_err(s: Str) -> Result<Int, ParseErr> {
+    let n = parse(s)?                    // no conversion needed
+    Ok(n + 1)
+}
+fn first_even(xs: List<Int>) -> Option<Int> {
+    let x = xs.find(|x| x % 2 == 0)?     // `?` on Option in a function returning Option
+    Some(x * 10)
+}
+fn steps(log: List<Str>) -> Result<Int, Str> {
+    log.push("one")
+    let v: Int = Err("stop")?
+    log.push("two")
+    Ok(v)
+}
+
+fn main() {
+    print(check("21"))
+    print(check("x"))
+    print(check(""))
+    print(check("500"))
+    print(same_err("4"))
+    print(same_err("q"))
+    print(first_even([1, 4, 5]))
+    print(first_even([1, 3]))
+    let log: List<Str> = []
+    print(steps(log))
+    print(log)
+}
+//> Ok(42)
+//> Err(parse: bad x)
+//> Err(parse: empty)
+//> Err(too big: 500)
+//> Ok(5)
+//> Err(bad q)
+//> Some(40)
+//> None
+//> Err("stop")
+//> ["one"]

@@ -1,0 +1,25 @@
+// spec: 5.5
+@target(browser)
+fn where_am_i() -> Str { "browser" }
+
+@target(wasi)
+fn where_am_i() -> Str { "wasi" }
+
+@target(wasi, plugin)
+fn server_side() -> Bool { true }
+
+fn add(a: Int, b: Int) -> Int { a + b }
+
+@derive(Show)
+struct P { x: Int }
+
+fn main() {
+    print(where_am_i())
+    print(server_side())
+    print(add(1, 2))
+    print(P { x: 1 })
+}
+//> wasi
+//> true
+//> 3
+//> P { x: 1 }

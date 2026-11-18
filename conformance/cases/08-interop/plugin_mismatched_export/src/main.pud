@@ -1,0 +1,7 @@
+// spec: 8.1
+// mode: reject
+// args: --target plugin
+// Exports must match the signatures the world requires.
+export fn add(a: Int, b: Str) -> Int { a }
+export fn greet(name: Str) -> Str { name }
+//~ add

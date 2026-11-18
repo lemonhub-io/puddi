@@ -1,0 +1,4 @@
+// spec: 7.4
+// mode: check
+fn main() { print("check only type-checks") }
+//!~ check only type-checks

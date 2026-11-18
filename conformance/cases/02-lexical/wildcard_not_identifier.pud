@@ -1,0 +1,7 @@
+// spec: 2.1
+// mode: reject
+fn main() {
+    let _ = 5
+    print(_)
+}
+//~ found `_`

@@ -1,0 +1,14 @@
+// spec: 2.2
+/// Doc comments attach to the next declaration.
+fn answer() -> Int { /* inline */ 42 }
+
+/* block comments
+   /* may nest */
+   and continue after the inner one */
+fn main() {
+    // line comment
+    print(answer()) // trailing comment
+    print(1 /* inside an expression */ + 1)
+}
+//> 42
+//> 2

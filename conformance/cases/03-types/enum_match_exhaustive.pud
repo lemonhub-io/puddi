@@ -1,0 +1,16 @@
+// spec: 3.4 4.4
+// mode: reject
+enum Shape {
+    Circle(Float)
+    Rect { w: Float, h: Float }
+    Empty
+}
+fn name(s: Shape) -> Str {
+    match s {
+        Shape.Circle(_) -> "circle"
+        Shape.Empty -> "empty"
+    }
+}
+fn main() {}
+//~ non-exhaustive match
+//~ Shape.Rect

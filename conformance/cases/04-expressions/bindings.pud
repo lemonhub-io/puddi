@@ -1,0 +1,34 @@
+// spec: 4.1
+struct Point { x: Int, var y: Int }
+
+fn bump(p: Point) { p.y += 1 }          // arguments share the object
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    let q = p                           // q and p refer to the same object
+    q.y = 10
+    print(p.y)
+    bump(p)
+    print(q.y)
+    var n = 1
+    n = n + 1
+    n += 1
+    print(n)
+    let (a, b) = (3, 4)                 // bindings take patterns
+    var (c, d) = (5, 6)
+    c = d
+    print("{a} {b} {c}")
+    print(same(p, q))
+    print(same(p, Point { x: 1, y: 11 }))
+    let xs = [1]
+    let ys = xs
+    ys.push(2)
+    print(xs)
+}
+//> 10
+//> 11
+//> 3
+//> 3 4 6
+//> true
+//> false
+//> [1, 2]

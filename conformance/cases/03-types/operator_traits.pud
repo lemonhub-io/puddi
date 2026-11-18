@@ -1,0 +1,75 @@
+// spec: 3.12 4.2
+struct V { x: Int, y: Int }
+impl Add for V { fn add(self, o: V) -> V { V { x: self.x + o.x, y: self.y + o.y } } }
+impl Sub for V { fn sub(self, o: V) -> V { V { x: self.x - o.x, y: self.y - o.y } } }
+impl Mul for V { fn mul(self, o: V) -> V { V { x: self.x * o.x, y: self.y * o.y } } }
+impl Div for V { fn div(self, o: V) -> V { V { x: self.x / o.x, y: self.y / o.y } } }
+impl Rem for V { fn rem(self, o: V) -> V { V { x: self.x % o.x, y: self.y % o.y } } }
+impl Neg for V { fn neg(self) -> V { V { x: -self.x, y: -self.y } } }
+impl Eq for V { fn eq(self, o: V) -> Bool { self.x == o.x && self.y == o.y } }
+impl Ord for V {
+    fn cmp(self, o: V) -> Ordering { (self.x * self.x + self.y * self.y).cmp(o.x * o.x + o.y * o.y) }
+}
+impl Show for V { fn show(self) -> Str { "<{self.x}, {self.y}>" } }
+
+struct Flag { on: Bool }
+impl Not for Flag { fn not(self) -> Flag { Flag { on: !self.on } } }
+
+struct Grid { w: Int, cells: List<Int> }
+impl Index<(Int, Int), Int> for Grid {
+    fn index(self, p: (Int, Int)) -> Int { self.cells[p.1 * self.w + p.0] }
+    fn set_index(self, p: (Int, Int), v: Int) { self.cells[p.1 * self.w + p.0] = v }
+}
+
+struct Range3 { start: Int }
+struct Range3Iter { var at: Int, end: Int }
+impl Iterator for Range3Iter {
+    type Item = Int
+    fn next(self) -> Option<Int> {
+        if self.at >= self.end { return None }
+        self.at += 1
+        Some(self.at - 1)
+    }
+}
+impl Iterable for Range3 {
+    type Iter = Range3Iter
+    fn iter(self) -> Range3Iter { Range3Iter { at: self.start, end: self.start + 3 } }
+}
+
+fn main() {
+    let a = V { x: 6, y: 8 }
+    let b = V { x: 4, y: 3 }
+    print(a + b)
+    print(a - b)
+    print(a * b)
+    print(a / b)
+    print(a % b)
+    print(-a)
+    print(a == V { x: 6, y: 8 })
+    print(a != b)
+    print(a > b)
+    print(b <= a)
+    print((!Flag { on: false }).on)
+    let g = Grid { w: 2, cells: [0, 0, 0, 0] }
+    g[(1, 1)] = 5
+    g[(1, 1)] += 2
+    print(g[(1, 1)])
+    var seen = ""
+    for i in (Range3 { start: 10 }) { seen = seen + "{i} " }
+    print(seen)
+    print("{a}")
+}
+//> <10, 11>
+//> <2, 5>
+//> <24, 24>
+//> <1, 2>
+//> <2, 2>
+//> <-6, -8>
+//> true
+//> true
+//> true
+//> true
+//> true
+//> 7
+//> 10 11 12 
+//> <6, 8>

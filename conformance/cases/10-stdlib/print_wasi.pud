@@ -1,0 +1,15 @@
+// spec: 10.1
+fn main() {
+    print("text")
+    print(42)
+    print(1.5)
+    print([1, 2])
+    print(Some("x"))
+    print(('a', true))
+}
+//> text
+//> 42
+//> 1.5
+//> [1, 2]
+//> Some("x")
+//> ('a', true)

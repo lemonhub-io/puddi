@@ -1,0 +1,33 @@
+// spec: 5.3
+@derive(Show)
+struct Limits { lo: Int, hi: Int }
+@derive(Show)
+enum Mode { Fast, Slow(Int) }
+
+const MAX_USERS: Int = 1_000
+const GREETING: Str = "hi"
+const DOUBLE: Int = MAX_USERS * 2 + 1
+const BIG: Bool = DOUBLE > 2000
+const BOUNDS: Limits = Limits { lo: -1, hi: MAX_USERS }
+const PAIR: (Int, Str) = (1, GREETING)
+const MODE: Mode = Mode.Slow(DOUBLE % 7)
+const RATIO: Float = 1.5 * 2.0
+
+fn main() {
+    print(MAX_USERS)
+    print(GREETING)
+    print(DOUBLE)
+    print(BIG)
+    print(BOUNDS)
+    print(PAIR)
+    print(MODE)
+    print(RATIO)
+}
+//> 1000
+//> hi
+//> 2001
+//> true
+//> Limits { lo: -1, hi: 1000 }
+//> (1, "hi")
+//> Slow(6)
+//> 3.0

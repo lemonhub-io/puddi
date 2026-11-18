@@ -1,0 +1,43 @@
+// spec: 3.13
+@derive(Eq, Ord, Hash, Show)
+struct Point { x: Int, y: Int }
+
+@derive(Eq, Ord, Show, Hash)
+enum Token {
+    Num(Int)
+    Op(Char)
+    Ident { name: Str }
+    End
+}
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    let q = Point { x: 1, y: 3 }
+    print(p)
+    print(p == Point { x: 1, y: 2 })
+    print(p == q)
+    print(p < q)                                // field order comparison
+    print(Point { x: 2, y: 0 } > q)
+    print(p.hash() == Point { x: 1, y: 2 }.hash())
+    let seen = Set.from([p, q, Point { x: 1, y: 2 }])
+    print(seen.len())
+    print([Token.Num(3), Token.Op('+'), Token.Ident { name: "x" }, Token.End])
+    print(Token.Num(1) < Token.Op('a'))         // variant order first
+    print(Token.Num(1) < Token.Num(2))
+    print(Token.Ident { name: "a" } == Token.Ident { name: "a" })
+    let pts = [q, p]
+    pts.sort()
+    print(pts)
+}
+//> Point { x: 1, y: 2 }
+//> true
+//> false
+//> true
+//> true
+//> true
+//> 2
+//> [Num(3), Op('+'), Ident { name: "x" }, End]
+//> true
+//> true
+//> true
+//> [Point { x: 1, y: 2 }, Point { x: 1, y: 3 }]

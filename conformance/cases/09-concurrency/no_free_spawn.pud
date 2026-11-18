@@ -1,0 +1,8 @@
+// spec: 9.2
+// mode: reject
+// There is no free-standing `spawn`.
+async fn job() -> Int { 1 }
+async fn main() {
+    let h = spawn(job())
+}
+//~ `spawn`
