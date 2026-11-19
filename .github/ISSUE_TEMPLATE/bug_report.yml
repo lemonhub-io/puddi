@@ -1,0 +1,40 @@
+name: Bug report
+description: The compiler, toolchain or standard library does something wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: program
+    attributes:
+      label: Program
+      description: The smallest program that shows the problem, and the command you ran
+      render: puddi
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Output, error messages or a description
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Cite the SPEC.md section if the problem is about language behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pud version
+      description: Output of `pud version`
+      placeholder: pud 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system and architecture, and the target (wasi, browser, plugin)
+      placeholder: Linux x86_64, wasi

@@ -1,5 +1,15 @@
 # Changelog
 
+All notable changes to Puddi are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/) as described in [docs/releasing.md](docs/releasing.md).
+
+## [Unreleased]
+
+### Documentation
+
+- Documentation site at https://puddi-lang.github.io/puddi-docs/ with a language guide, toolchain and standard library pages, built from [puddi-lang/puddi-docs](https://github.com/puddi-lang/puddi-docs)
+- Contributing guide, code of conduct, security policy, compiler architecture and release process documents
+- Draft governance model in GOVERNANCE.md, not yet in effect
+
 ## [0.1.0] - 2026-11-18
 
 First release of Puddi and its `pud` toolchain, implementing the draft 0.1 language specification.

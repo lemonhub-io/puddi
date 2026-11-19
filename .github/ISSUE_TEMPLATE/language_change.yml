@@ -1,0 +1,30 @@
+name: Language or library proposal
+description: Propose a change to the specification, the standard library or the toolchain
+labels: [proposal]
+body:
+  - type: markdown
+    attributes:
+      value: Discuss the idea here before opening a pull request. See CONTRIBUTING.md for how specification changes are made.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today? Show code if you can
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The change you suggest, with examples and, for language changes, the affected SPEC.md sections
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Effect on existing programs
+      description: Does this break or change the meaning of any valid program?
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives

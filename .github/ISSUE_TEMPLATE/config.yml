@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://puddi-lang.github.io/puddi-docs/
+    about: The language guide, toolchain and standard library documentation
+  - name: Documentation problems
+    url: https://github.com/puddi-lang/puddi-docs/issues
+    about: Mistakes or gaps in the documentation site
+  - name: Security issues
+    url: https://github.com/puddi-lang/puddi/security/advisories/new
+    about: Report vulnerabilities privately, not in a public issue

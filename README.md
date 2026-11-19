@@ -1,8 +1,10 @@
 # Puddi
 
-A statically typed, expression-oriented language that compiles to WebAssembly.
+[![CI](https://github.com/puddi-lang/puddi/actions/workflows/ci.yml/badge.svg)](https://github.com/puddi-lang/puddi/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/puddi-lang/puddi)](https://github.com/puddi-lang/puddi/releases/latest)
+[![Docs](https://img.shields.io/badge/docs-puddi--docs-blue)](https://puddi-lang.github.io/puddi-docs/)
 
-The language specification is in [SPEC.md](SPEC.md) (draft 0.1).
+A statically typed, expression-oriented language that compiles to WebAssembly. One source language targets the browser, WASI runtimes and plugin hosts, using the engine's garbage collector (WasmGC) and the Component Model.
 
 ```puddi
 @derive(Eq, Show)
@@ -17,6 +19,8 @@ fn main() {
     print("{pending.len()} of {todos.len()} left")
 }
 ```
+
+**[Documentation](https://puddi-lang.github.io/puddi-docs/)** · [Language specification](SPEC.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ## Install
 
@@ -42,12 +46,9 @@ cargo install --locked --git https://github.com/puddi-lang/puddi --tag v0.1.0
 
 `pud test` and the browser target also need Node.js 22 or newer.
 
-## The `pud` toolchain
-
-`pud` is written in Rust. It compiles Puddi to WasmGC and packages every target as a WebAssembly component: the `browser` component comes with JavaScript loader glue, and `wasi` components run in the embedded Wasmtime.
+## Quick start
 
 ```sh
-cargo build --release          # builds target/release/pud (with the embedded Wasmtime runtime)
 pud new hello && cd hello
 pud run                        # build src/main.pud as a WASI 0.3 component and run it
 pud test                       # run test blocks, each in a fresh instance
@@ -68,59 +69,31 @@ pud run some_file.pud          # single-file mode, no package needed
 | `pud fmt [files] [--check]` | format in the official style |
 | `pud doc [path]` | write Markdown docs for public items to `target/doc` |
 
-`cargo build --no-default-features` leaves out the embedded runtime for a much faster build; `pud run` then asks for an external WASI 0.3 host with component-model async, threading, GC and exceptions enabled. `PUD_HOST=node pud run` runs the `wasi` target's core module with Node.js instead. Tests and the browser target need Node.js 22 or newer (WebAssembly GC; JSPI for async code in Node 24+ and current browsers).
+The [documentation](https://puddi-lang.github.io/puddi-docs/) has a language guide and covers [targets](https://puddi-lang.github.io/puddi-docs/toolchain/targets.html), [WIT imports](https://puddi-lang.github.io/puddi-docs/interop/wit.html), [plugins](https://puddi-lang.github.io/puddi-docs/interop/plugins.html), [workers](https://puddi-lang.github.io/puddi-docs/guide/workers.html), [dependencies](https://puddi-lang.github.io/puddi-docs/toolchain/dependencies.html) and the [standard library](https://puddi-lang.github.io/puddi-docs/stdlib/prelude.html). Runnable examples are in [examples/](examples).
 
-### Targets
+## Status
 
-- **wasi:** a component of the `wasi:cli/command@0.3.2` world (or `[target.wasi] world` in `pud.toml`). The runtime talks to WASI directly: stdio goes through `stream<u8>`, files through `wasi:filesystem` preopens, time and randomness through `wasi:clocks` and `wasi:random`, and `std.http` through `wasi:http/client`. `run` is lifted with the stackful async ABI and every spawned task runs on its own component-model thread, so a blocking WASI call suspends only its task. Floats are formatted and parsed in software ([src/soft.pud](src/soft.pud)) with the same shortest round-trip output as JavaScript.
-- **plugin:** a component for a host-defined world, set with `[target.plugin] world = "wit/host.wit#plugin"`. `export fn` items implement the world's exports (`export async fn` for `async func` exports, which may spawn tasks and await); missing or mismatched exports are compile errors. A plugin gets the standard modules its world provides (SPEC §10.2 "host"): `std.time` with `wasi:clocks/monotonic-clock` and `wasi:clocks/system-clock`, `std.random` with `wasi:random/random`, `std.http` with `wasi:http/types` and `wasi:http/client`, `std.worker` with `puddi:runtime/workers` and `puddi:runtime/port`, and `print` and `std.log` go to `wasi:logging/logging` when the world has it. `pud run --target plugin -- <export> [args]` calls an export in the embedded runtime, which provides those interfaces and makes other host imports trap. See [examples/plugin](examples/plugin) and [examples/plugin-host](examples/plugin-host).
-- **browser:** a component plus `puddi.mjs`, with `std.dom`, `std.http` (fetch) and `std.worker` (Web Workers). Browsers cannot instantiate components yet, so the glue does what `jco transpile` does: it unpacks the core module from the component and instantiates it with the host functions the component's world imports.
+Puddi 0.1 is the first release. The compiler implements the draft 0.1 [specification](SPEC.md): structs, enums, generics, traits and `dyn Trait`, pattern matching with exhaustiveness checking, `?` and `AnyErr`, `async fn` with structured concurrency, workers, WIT imports and exports, `test` blocks, and a standard library with JSON, HTTP, files, time, randomness and the DOM.
 
-### Workers
+The [conformance suite](conformance/README.md) checks the toolchain against the specification: every normative section has passing cases, and cases marked `xfail` record the [known gaps](conformance/README.md#known-non-conformance). Other limitations are listed on the [implementation status](https://puddi-lang.github.io/puddi-docs/reference/status.html) page. The language may still change in 0.x releases.
 
-On `browser`, workers are Web Workers (worker threads under Node.js). On `wasi`, a program that imports `std.worker` imports the bundled `puddi:runtime/workers` and `puddi:runtime/port` interfaces ([wit/puddi/runtime.wit](wit/puddi/runtime.wit)) and exports `puddi:runtime/worker-main`. The embedded runner implements them by instantiating the same component again on another OS thread for each worker, so workers run in parallel with separate heaps.
-
-### WIT imports
-
-`import wasi:filesystem/preopens` (or any interface from the package's `wit/` directory) generates Puddi bindings: records become structs, variants and enums become enums, flags become structs of `Bool`, resources become handle structs with methods and `drop()`, and the canonical ABI lowering and lifting are generated as Puddi code. The interface is added to the component's world automatically.
-
-```puddi
-import wasi:clocks/system-clock as clock
-
-fn main() {
-    print("seconds since the epoch: {clock.now().seconds}")
-}
-```
-
-### Dependencies
-
-`[deps]` entries are git repositories with semver tags (`lib = "github.com/someone/lib@1.2"`) or local paths (`util = { path = "../util" }`). Versions are chosen by minimal version selection, the lock file records the commit of every tag, and modules of a dependency are imported through its name (`import lib.parser`).
-
-## Implementation status
-
-The compiler implements the draft 0.1 language.
-
-- **Language:** structs, enums, tuples, generics with bounds (monomorphized), traits with default methods, associated types and supertraits, `dyn Trait`, operator traits, closures that capture by reference, pattern matching with exhaustiveness checking (guards, ranges, or-patterns, list patterns, `let ... else`, `if let`, `while let`), `?` with `From` conversion, `AnyErr` with `downcast`, `@derive(Eq, Ord, Hash, Show, Transfer)`, constants, type aliases, `async fn`/`.await`, `task.scope` with structured cancellation, workers, implicit numeric widening, checked integer overflow, modules and imports, WIT imports, `test` blocks, `@target`, `@extern`, `@export`/`export fn` and `@deprecated`.
-- **Standard library:** the prelude (`Option`, `Result`, `List`, `Map`, `Set` and their views, `Str`, `Char`, `StrBuilder`, iterators and numeric methods) plus `std.math`, `std.log`, `std.time`, `std.random`, `std.io`, `std.fs`, `std.env`, `std.json`, `std.http`, `std.worker` and `std.dom`, each available on the targets listed in SPEC §10.2. The prelude is written in Puddi ([src/prelude.pud](src/prelude.pud), [std/](std)).
-- **Concurrency:** tasks run concurrently on component-model threads in `wasi` components and on a JSPI scheduler on the JavaScript host; a scope whose body fails cancels its unfinished children at their next suspension point (in components, a wasm exception unwinds the cancelled task). Workers run in Web Workers, Node.js worker threads or separate component instances on their own threads, and exchange `Transfer` values.
-- **Output:** WasmGC throughout. Structs and enums map to GC structs, generics are monomorphized, and closures and trait objects are GC structs that hold function references. Components are encoded with `wit-component`.
-
-Limitations:
-
-- `std.io`, `std.fs` and `std.env` exist only on `wasi`, and `std.dom` only on `browser`, as in SPEC §10.2
-- other WASI hosts can run `wasi` components that use workers only if they implement the `puddi:runtime` worker interfaces
-- the embedded runner links WASI 0.3.0 from Wasmtime 50, which satisfies the 0.3.2 imports through semver matching
-- `pud test` runs tests on the JavaScript host, so tests cannot call WIT imports
-- grapheme segmentation is an approximation (combining marks, variation selectors, ZWJ sequences), and case mapping covers ASCII only
-
-## Tests
+## Development
 
 ```sh
-cargo test      # regression tests in tests/run and tests/fail, plus the conformance suite
+cargo build --release          # target/release/pud, with the embedded Wasmtime runtime
+cargo build --no-default-features   # much faster, without the embedded runtime
+cargo test --release           # regression tests and the conformance suite
 node conformance/run.mjs --coverage   # the conformance suite alone, with a per-section report
 ```
 
-The [conformance suite](conformance/README.md) checks the toolchain against SPEC.md: every case names the spec sections it verifies, and every normative section has passing cases. Cases marked `xfail` record where the compiler still differs from the spec.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the test suites and how to change the specification, [docs/architecture.md](docs/architecture.md) for a tour of the compiler, and [docs/releasing.md](docs/releasing.md) for the release process.
+
+## Community
+
+- Questions, bugs and proposals: [issues](https://github.com/puddi-lang/puddi/issues)
+- Security issues: see [SECURITY.md](SECURITY.md)
+- Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md)
+- The project is run informally by its maintainers for now; [GOVERNANCE.md](GOVERNANCE.md) is a draft of the model it will adopt as the community grows
 
 ## License
 
