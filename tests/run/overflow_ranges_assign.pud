@@ -1,0 +1,8 @@
+// A fact from a condition ends when the local is assigned.
+fn main() {
+    var y = 0
+    if y < 10 {
+        y = 2147483647
+        print(y + 1)
+    }
+}

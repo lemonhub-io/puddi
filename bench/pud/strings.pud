@@ -1,0 +1,18 @@
+import std.time
+
+fn main() {
+    let t = time.monotonic_ms()
+    let n = 500_000
+    let sb = StrBuilder.new()
+    var i = 0
+    while i < n {
+        sb.push("w{i * 7 % 5000} ")
+        i += 1
+    }
+    let text = sb.to_str()
+    let counts: Map<Str, Int> = Map.new()
+    for w in text.split_whitespace() {
+        counts[w] = counts.get(w).unwrap_or(0) + 1
+    }
+    print("strings {text.utf8_len()}/{counts.len()}/{counts["w42"]} {time.monotonic_ms() - t}")
+}

@@ -99,7 +99,66 @@ fn engine() -> wasmtime::Result<Engine> {
     config.wasm_exceptions(true);
     config.wasm_gc(true);
     config.wasm_function_references(true);
+    // Puddi code allocates heavily and reads GC references in hot loops: the copying
+    // collector bump-allocates and needs no reference-count barriers, unlike DRC.
+    // PUD_WASMTIME_GC and PUD_WASMTIME_INLINE override the choices for measurements.
+    config.collector(match std::env::var("PUD_WASMTIME_GC").as_deref() {
+        Ok("drc") => wasmtime::Collector::DeferredReferenceCounting,
+        _ => wasmtime::Collector::Copying,
+    });
+    // small runtime helpers (List indexing, overflow checks, iterator adapters) are
+    // separate wasm functions; Cranelift only removes their call overhead when inlining
+    // a 16 MiB starting heap avoids most early collections and regrowths (sorting a million
+    // numbers runs 1.7x faster) for a few MiB more memory; PUD_WASMTIME_HEAP_MB overrides it
+    let heap_mb = std::env::var("PUD_WASMTIME_HEAP_MB").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(16);
+    config.gc_heap_initial_size(heap_mb << 20);
+    if std::env::var("PUD_WASMTIME_INLINE").as_deref() != Ok("0") {
+        config.compiler_inlining(wasmtime::Inlining::Yes);
+    }
     Engine::new(&config)
+}
+
+/// Compiles `bytes`, or loads the machine code compiled by an earlier run of the same
+/// component from the user's cache directory (`PUD_NO_CACHE=1` turns this off).
+fn load_component(engine: &Engine, bytes: &[u8]) -> wasmtime::Result<Component> {
+    let Some(dir) = cache_dir() else { return Component::new(engine, bytes) };
+    use std::hash::{Hash, Hasher};
+    let mut key = String::new();
+    for salt in [0u8, 1] {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (salt, env!("CARGO_PKG_VERSION"), std::env::var("PUD_WASMTIME_GC").ok(), std::env::var("PUD_WASMTIME_INLINE").ok(), std::env::var("PUD_WASMTIME_HEAP_MB").ok(), bytes).hash(&mut h);
+        key.push_str(&format!("{:016x}", h.finish()));
+    }
+    let path = dir.join(format!("{key}.cwasm"));
+    if path.exists() {
+        // SAFETY: the file was written by `precompile_component` below into a directory only
+        // this user can write; Wasmtime rejects code compiled for another engine configuration.
+        if let Ok(c) = unsafe { Component::deserialize_file(engine, &path) } {
+            return Ok(c);
+        }
+    }
+    let code = engine.precompile_component(bytes)?;
+    let _ = std::fs::create_dir_all(&dir);
+    let tmp = dir.join(format!("{key}.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, &code).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    // SAFETY: `code` was just produced by this engine
+    unsafe { Component::deserialize(engine, &code) }
+}
+
+fn cache_dir() -> Option<std::path::PathBuf> {
+    if std::env::var_os("PUD_NO_CACHE").is_some() {
+        return None;
+    }
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Caches"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
+    };
+    base.map(|b| b.join("pud").join("wasmtime"))
 }
 
 fn add_workers(linker: &mut Linker<State>) -> wasmtime::Result<()> {
@@ -192,7 +251,7 @@ async fn run_async(bytes: &[u8], program: &str, args: &[String]) -> wasmtime::Re
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
     add_workers(&mut linker)?;
-    let component = Component::new(&engine, bytes)?;
+    let component = load_component(&engine, bytes)?;
     let mut argv = vec![program.to_string()];
     argv.extend(args.iter().cloned());
     let shared = Arc::new(Shared { engine: engine.clone(), component: component.clone(), linker: linker.clone(), argv: argv.clone() });
@@ -303,7 +362,7 @@ pub fn invoke(component: &[u8], program: &str, name: &str, args: &[String]) -> u
 
 async fn invoke_async(bytes: &[u8], program: &str, name: &str, args: &[String]) -> wasmtime::Result<u8> {
     let engine = engine()?;
-    let component = Component::new(&engine, bytes)?;
+    let component = load_component(&engine, bytes)?;
     let mut linker = Linker::<State>::new(&engine);
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;

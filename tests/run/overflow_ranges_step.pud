@@ -1,0 +1,10 @@
+// `i < n` only makes `i + 1` safe: a larger step can still overflow.
+fn main() {
+    var i = 2147483640
+    var n = 0
+    while i < 2147483647 {
+        i += 2
+        n += 1
+    }
+    print(n)
+}

@@ -1,0 +1,9 @@
+import std.time
+
+fn fib(n: Int) -> Int { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }
+
+fn main() {
+    let t = time.monotonic_ms()
+    let r = fib(38)
+    print("fib {r} {time.monotonic_ms() - t}")
+}

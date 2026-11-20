@@ -1,0 +1,37 @@
+// Overflow checks that range analysis leaves out must be the ones that cannot fail.
+
+fn count_up() -> Int {
+    // `i < MAX` holds before every increment, so this reaches MAX without overflowing
+    var i = 2147483640
+    while i < 2147483647 { i += 1 }
+    i
+}
+
+fn count_down() -> Int {
+    var i = -2147483640
+    while i > -2147483648 { i -= 1 }
+    i
+}
+
+fn dec(n: Int) -> Int { if n < 2 { n } else { n - 1 } }
+
+fn inner(limit: Int) -> Int {
+    var i = limit - 2
+    while i < limit {
+        var k = 0
+        while k < 3 {
+            // the outer condition is not checked again between these increments
+            i += 1
+            k += 1
+        }
+    }
+    i
+}
+
+fn main() {
+    print(count_up())
+    print(count_down())
+    print(dec(-2147483648))
+    print(dec(2147483647))
+    print(inner(2147483647))
+}

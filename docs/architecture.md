@@ -40,7 +40,7 @@ The prelude, standard modules and platform layer are embedded in the binary with
 
 **Elaboration** (`elab.rs`, `types.rs`, `exhaust.rs`, `ir.rs`). Type inference and checking of function bodies, and lowering to a typed IR in which every type is concrete. Generic functions are checked per instantiation and monomorphized: `elab.rs` keeps a queue of function instances, seeded with the entry points and exports, and elaborates each instance once. Implicit widening, `?` with `From`, `dyn Trait` coercions, closures and their captured variables, and async functions are all lowered here. `exhaust.rs` checks `match` exhaustiveness with the usefulness algorithm.
 
-**Code generation** (`codegen.rs`). Turns IR into WebAssembly text using WasmGC types: structs and enum variants become GC structs (enum variants are subtypes of a base struct), closures and trait objects are GC structs with function references, and integer overflow checks are inlined. The text is assembled into a binary core module with the `wat` crate.
+**Code generation** (`codegen.rs`). Turns IR into WebAssembly text using WasmGC types: structs and enum variants become GC structs (enum variants are subtypes of a base struct), closures and trait objects are GC structs with function references, and integer overflow checks are inlined. `ranges.rs` tracks the value ranges of integer locals implied by `if` and `while` conditions, and codegen leaves out the overflow checks those ranges rule out. The text is assembled into a binary core module with the `wat` crate.
 
 **Components** (`wit.rs`). Loads WIT worlds with `wit-parser`, generates the bindings for imported interfaces (including canonical ABI lifting and lowering, written as Puddi), generates export wrappers that check the user's `export fn` items against the world, and encodes the final component with `wit-component`. The bundled WASI 0.3 and `puddi:runtime` WIT files are in `wit/`.
 
@@ -48,7 +48,7 @@ The prelude, standard modules and platform layer are embedded in the binary with
 
 | Target | Host side |
 |---|---|
-| `wasi` | `runner.rs` runs the component in the embedded Wasmtime with WASI 0.3, and implements the `puddi:runtime` worker interfaces by instantiating the component again on another OS thread |
+| `wasi` | `runner.rs` runs the component in the embedded Wasmtime with WASI 0.3 (copying collector, Cranelift inlining, compiled code cached in the user cache directory), and implements the `puddi:runtime` worker interfaces by instantiating the component again on another OS thread |
 | `browser` | `runtime.mjs` (embedded and written out as `puddi.mjs`) extracts the core module from the component and instantiates it with JavaScript host functions; it also runs `pud test` and `PUD_HOST=node` under Node.js |
 | `plugin` | the application that loads the component; `pud run --target plugin` uses `runner.rs` to call one export |
 

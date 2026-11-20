@@ -15,6 +15,7 @@ mod lexer;
 mod numeric;
 mod parser;
 mod program;
+mod ranges;
 #[cfg(feature = "runtime")]
 mod runner;
 mod tools;

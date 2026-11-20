@@ -18,7 +18,7 @@ toml = "1.2"
 serde = { version = "1", features = ["derive"] }
 wit-parser = "0.263"
 wit-component = "0.263"
-wasmtime = { version = "50", features = ["component-model", "component-model-async", "gc", "gc-drc", "cranelift"], optional = true }
+wasmtime = { version = "50", features = ["component-model", "component-model-async", "gc", "gc-copying", "gc-drc", "cranelift"], optional = true }
 wasmtime-wasi = { version = "50", features = ["p3"], optional = true }
 wasmtime-wasi-http = { version = "50", features = ["p3"], optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }

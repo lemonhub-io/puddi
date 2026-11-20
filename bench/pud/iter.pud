@@ -1,0 +1,8 @@
+import std.time
+
+fn main() {
+    let t = time.monotonic_ms()
+    let n = 10_000_000
+    let r: I64 = (0..n).map(|x: Int| -> Int { x % 1000 }).filter(|x: Int| -> Bool { x % 3 == 0 }).fold(0, |a: I64, x: Int| -> I64 { a + x })
+    print("iter {r} {time.monotonic_ms() - t}")
+}

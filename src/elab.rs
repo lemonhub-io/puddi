@@ -268,6 +268,10 @@ fn abind(n: &str, span: Span) -> ast::Pattern {
     ast::Pattern { kind: ast::PatKind::Bind(aident(n, span)), span }
 }
 
+fn get_target(base: &str, idx: &str, span: Span) -> ast::Expr {
+    ae(ast::ExprKind::Index(Box::new(aname(base, span)), Box::new(aname(idx, span))), span)
+}
+
 fn ablock(stmts: Vec<ast::Stmt>, tail: Option<ast::Expr>, span: Span) -> ast::Block {
     ast::Block { stmts, tail: tail.map(Box::new), span }
 }
@@ -812,6 +816,9 @@ impl<'g, 'p> Elab<'g, 'p> {
             ast::ExprKind::Call(callee, args) => self.call_expr(callee, args, span, expect),
             ast::ExprKind::Index(base, idx) => {
                 let b = self.expr(base, None);
+                if let Some(elem) = self.list_elem(&b.ty) {
+                    return self.list_access(b, elem, idx, None, span);
+                }
                 self.method_call(b, "index", &[], vec![(**idx).clone()], span, expect)
             }
             ast::ExprKind::Try(inner) => self.try_expr(inner, span),
@@ -1956,7 +1963,10 @@ impl<'g, 'p> Elab<'g, 'p> {
             ast::ExprKind::Index(base, idx) => {
                 let b = self.expr(base, None);
                 match op {
-                    None => self.method_call(b, "set_index", &[], vec![(**idx).clone(), r.clone()], span, None),
+                    None => match self.list_elem(&b.ty) {
+                        Some(elem) => self.list_access(b, elem, idx, Some(r), span),
+                        None => self.method_call(b, "set_index", &[], vec![(**idx).clone(), r.clone()], span, None),
+                    },
                     Some(op) => {
                         let tb = self.tmp_name("ib");
                         let ti = self.tmp_name("ii");
@@ -1968,7 +1978,7 @@ impl<'g, 'p> Elab<'g, 'p> {
                         self.bind_local(&ti, il);
                         let get = ae(ast::ExprKind::Index(Box::new(aname(&tb, span)), Box::new(aname(&ti, span))), span);
                         let newv = ae(ast::ExprKind::Binary(op, Box::new(get), Box::new(r.clone())), span);
-                        let set = acall_method(aname(&tb, span), "set_index", vec![aname(&ti, span), newv], span);
+                        let set = ae(ast::ExprKind::Assign(None, Box::new(get_target(&tb, &ti, span)), Box::new(newv)), span);
                         let s = self.expr(&set, None);
                         self.pop_scope();
                         let bty = b.ty.clone();
@@ -2192,14 +2202,80 @@ impl<'g, 'p> Elab<'g, 'p> {
             let e = self.block(&blk, Some(&Ty::Unit));
             return e;
         }
-        // general: let it = (iter).iter(); while let Some(pat) = it.next() { body }
-        let it = self.tmp_name("it");
-        let init = acall_method(iter.clone(), "iter", vec![], iter.span);
-        let some_pat = ast::Pattern { kind: ast::PatKind::TupleStruct(vec![aident("Some", pat.span)], vec![pat.clone()]), span: pat.span };
-        let next = acall_method(aname(&it, span), "next", vec![], span);
-        let wl = ae(ast::ExprKind::While(ast::Cond::Let(some_pat, Box::new(next)), body.clone()), span);
-        let blk = ablock(vec![alet(false, &it, init, span), ast::Stmt::Expr(wl)], None, span);
-        self.block(&blk, Some(&Ty::Unit))
+        // the iterable is elaborated once and held in a hidden local, so its type can pick the loop shape
+        self.push_scope();
+        let src = self.expr(iter, None);
+        let src_ty = self.resolve(&src.ty);
+        let src_name = self.tmp_name("src");
+        let src_id = self.new_local(&src_name, src_ty.clone(), false);
+        self.bind_local(&src_name, src_id);
+        let list = self.prog.known_adt("List");
+        let blk = if matches!(&src_ty, Ty::Adt(id, _) if *id == list) {
+            // List: var i = 0; while i < src.len() { let pat = src[i]; i += 1; body }
+            // (the same order as ListIter, without allocating an Option per element)
+            let i = self.tmp_name("i");
+            let cond = ae(ast::ExprKind::Binary(BinOp::Lt, Box::new(aname(&i, span)), Box::new(acall_method(aname(&src_name, span), "len", vec![], span))), span);
+            let elem = ae(ast::ExprKind::Index(Box::new(aname(&src_name, span)), Box::new(aname(&i, span))), span);
+            let bind_stmt = ast::Stmt::Let { mutable: false, pat: pat.clone(), ty: None, init: elem, else_block: None, span: pat.span };
+            let step = ae(ast::ExprKind::Assign(Some(BinOp::Add), Box::new(aname(&i, span)), Box::new(ae(ast::ExprKind::Int(1), span))), span);
+            let wb = ablock(vec![bind_stmt, ast::Stmt::Expr(step)], Some(bexpr), span);
+            ablock(vec![alet(true, &i, ae(ast::ExprKind::Int(0), span), span), ast::Stmt::Expr(ae(ast::ExprKind::While(ast::Cond::Expr(Box::new(cond)), wb), span))], None, span)
+        } else {
+            // general: let it = src.iter(); while let Some(pat) = it.next() { body }
+            let it = self.tmp_name("it");
+            let init = acall_method(aname(&src_name, span), "iter", vec![], iter.span);
+            let some_pat = ast::Pattern { kind: ast::PatKind::TupleStruct(vec![aident("Some", pat.span)], vec![pat.clone()]), span: pat.span };
+            let next = acall_method(aname(&it, span), "next", vec![], span);
+            let wl = ae(ast::ExprKind::While(ast::Cond::Let(some_pat, Box::new(next)), body.clone()), span);
+            ablock(vec![alet(false, &it, init, span), ast::Stmt::Expr(wl)], None, span)
+        };
+        let inner = self.block(&blk, Some(&Ty::Unit));
+        self.pop_scope();
+        let bind = Pat { kind: PatKind::Bind(src_id, None), ty: src_ty, span };
+        mk(ExprKind::Block(vec![Stmt::Let(bind, src)], Some(Box::new(inner))), Ty::Unit, span)
+    }
+
+    /// The element type when `t` is a `List`.
+    fn list_elem(&mut self, t: &Ty) -> Option<Ty> {
+        let list = self.prog.known_adt("List");
+        match self.resolve(t) {
+            Ty::Adt(id, args) if id == list => Some(args[0].clone()),
+            _ => None,
+        }
+    }
+
+    /// `list[i]` and `list[i] = v` without calling `Index`: one unsigned comparison against
+    /// the length (the out-of-bounds panic is out of line), then the array access. Same
+    /// behaviour and evaluation order as `List`'s `Index` impl (list, index, value, check).
+    fn list_access(&mut self, b: Expr, elem: Ty, idx: &ast::Expr, val: Option<&ast::Expr>, span: Span) -> Expr {
+        let int = Ty::Int(IntTy::I32);
+        let u32t = Ty::Int(IntTy::U32);
+        let lty = b.ty.clone();
+        let bl = self.new_local("$lb", lty.clone(), false);
+        let i = self.expr_coerce(idx, &int);
+        let il = self.new_local("$li", int.clone(), false);
+        let mut stmts = vec![Stmt::Let(Pat { kind: PatKind::Bind(bl, None), ty: lty, span }, b), Stmt::Let(Pat { kind: PatKind::Bind(il, None), ty: int.clone(), span }, i)];
+        let v = val.map(|v| {
+            let e = self.expr_coerce(v, &elem);
+            let vl = self.new_local("$lv", elem.clone(), false);
+            stmts.push(Stmt::Let(Pat { kind: PatKind::Bind(vl, None), ty: elem.clone(), span }, e));
+            self.local_expr(vl, span)
+        });
+        let lv = self.local_expr(bl, span);
+        let iv = self.local_expr(il, span);
+        let len = mk(ExprKind::Field(Box::new(lv.clone()), None, 0), int.clone(), span);
+        let data = mk(ExprKind::Field(Box::new(lv), None, 1), Ty::Array(Box::new(elem.clone())), span);
+        let as_u32 = |e: Expr| mk(ExprKind::Cast(Box::new(e)), u32t.clone(), span);
+        let cond = mk(ExprKind::Prim(PrimOp::Ge, u32t.clone(), vec![as_u32(iv.clone()), as_u32(len.clone())]), Ty::Bool, span);
+        let oob = mk(ExprKind::Call(FnInst { fn_id: self.prog.known_fn("__list_oob"), targs: vec![] }, vec![iv.clone(), len]), Ty::Never, span);
+        let unit = mk(ExprKind::Block(vec![], None), Ty::Unit, span);
+        stmts.push(Stmt::Expr(mk(ExprKind::If(Box::new(cond), Box::new(oob), Box::new(unit)), Ty::Unit, span)));
+        let access = match v {
+            None => mk(ExprKind::Intrinsic("array_get".into(), vec![elem.clone()], vec![data, iv]), elem, span),
+            Some(v) => mk(ExprKind::Intrinsic("array_set".into(), vec![elem], vec![data, iv, v]), Ty::Unit, span),
+        };
+        let ty = access.ty.clone();
+        mk(ExprKind::Block(stmts, Some(Box::new(access))), ty, span)
     }
 
     fn try_expr(&mut self, inner: &ast::Expr, span: Span) -> Expr {

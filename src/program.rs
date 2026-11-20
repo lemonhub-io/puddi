@@ -877,7 +877,7 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
     }
     for name in [
         "Option", "Result", "List", "Map", "Set", "Ordering", "Range", "ListView", "MapView", "SetView", "AnyErr", "StrIndex", "Show", "Eq", "Ord", "Hash", "From",
-        "Error", "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Not", "Index", "Transfer", "Iterator", "Future",
+        "Error", "Add", "Sub", "Mul", "Div", "Rem", "Neg", "Not", "Index", "Transfer", "Iterator", "Future", "__list_oob",
     ] {
         if let Some((d, _)) = p.modules[p.prelude].items.get(name).cloned() {
             p.known.insert(name, d);

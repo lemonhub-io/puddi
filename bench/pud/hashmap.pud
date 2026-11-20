@@ -1,0 +1,26 @@
+import std.time
+
+fn main() {
+    let t = time.monotonic_ms()
+    let n = 1_000_000
+    let m: Map<Int, Int> = Map.new()
+    var s: I64 = 42
+    var i = 0
+    while i < n {
+        s = (s * 1103515245 + 12345) % 2147483648
+        let k = (s % 2000000).to_int().unwrap()
+        m[k] = i
+        i += 1
+    }
+    var hits = 0
+    var sum: I64 = 0
+    var q = 0
+    while q < n {
+        if let Some(v) = m.get(q * 2) {
+            hits += 1
+            sum += v
+        }
+        q += 1
+    }
+    print("hashmap {m.len()}/{hits}/{sum} {time.monotonic_ms() - t}")
+}

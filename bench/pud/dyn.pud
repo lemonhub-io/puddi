@@ -1,0 +1,31 @@
+import std.time
+
+trait Shape {
+    fn area(self) -> Float
+}
+
+struct Sq { s: Float }
+struct Rect { w: Float, h: Float }
+struct Tri { b: Float, h: Float }
+
+impl Shape for Sq { fn area(self) -> Float { self.s * self.s } }
+impl Shape for Rect { fn area(self) -> Float { self.w * self.h } }
+impl Shape for Tri { fn area(self) -> Float { 0.5 * self.b * self.h } }
+
+fn main() {
+    let t = time.monotonic_ms()
+    let shapes: List<dyn Shape> = []
+    var i = 0
+    while i < 1000 {
+        let f: Float = i % 10
+        if i % 3 == 0 { shapes.push(Sq { s: f }) } else if i % 3 == 1 { shapes.push(Rect { w: f, h: 2.0 }) } else { shapes.push(Tri { b: f, h: 3.0 }) }
+        i += 1
+    }
+    var total = 0.0
+    var r = 0
+    while r < 20_000 {
+        for sh in shapes { total += sh.area() }
+        r += 1
+    }
+    print("dyn {total} {time.monotonic_ms() - t}")
+}

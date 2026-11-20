@@ -8,9 +8,11 @@
 @intrinsic("array_get") fn __array_get<T>(a: Array<T>, i: Int) -> T
 @intrinsic("array_set") fn __array_set<T>(a: Array<T>, i: Int, v: T)
 @intrinsic("array_copy") fn __array_copy<T>(dst: Array<T>, di: Int, src: Array<T>, si: Int, n: Int)
+@intrinsic("array_fill") fn __array_fill<T>(a: Array<T>, i: Int, v: T, n: Int)
 @intrinsic("array_get") fn __bytes_get(a: Array<U8>, i: Int) -> Int
 @intrinsic("array_set") fn __bytes_set(a: Array<U8>, i: Int, v: Int)
 @intrinsic("str_len") fn __str_len(s: Str) -> Int
+@intrinsic("bytes_copy_str") fn __bytes_copy_str(dst: Array<U8>, di: Int, src: Str, si: Int, n: Int)
 @intrinsic("str_byte") fn __str_byte(s: Str, i: Int) -> Int
 @intrinsic("str_slice") fn __str_slice(s: Str, a: Int, b: Int) -> Str
 @intrinsic("str_from_bytes") fn __str_from_bytes(a: Array<U8>, n: Int) -> Str
@@ -246,18 +248,14 @@ pub trait Iterator {
     }
     fn collect(self) -> List<Self.Item> {
         let out: List<Self.Item> = List.new()
-        while let Some(x) = self.next() {
-            out.push(x)
-        }
-        out
+        self.fold(out, |o, x| {
+            o.push(x)
+            o
+        })
     }
     fn to_list(self) -> List<Self.Item> { self.collect() }
     fn count(self) -> Int {
-        var n = 0
-        while let Some(_) = self.next() {
-            n += 1
-        }
-        n
+        self.fold(0, |n, _x| n + 1)
     }
     fn fold<B>(self, init: B, f: fn(B, Self.Item) -> B) -> B {
         var acc = init
@@ -267,9 +265,7 @@ pub trait Iterator {
         acc
     }
     fn for_each(self, f: fn(Self.Item)) {
-        while let Some(x) = self.next() {
-            f(x)
-        }
+        self.fold((), |_u, x| f(x))
     }
     fn any(self, f: fn(Self.Item) -> Bool) -> Bool {
         while let Some(x) = self.next() {
@@ -344,6 +340,10 @@ impl<I: Iterator, A, B> Iterator for Mapped<I, A, B> {
             None -> None
         }
     }
+    fn fold<C>(self, init: C, f: fn(C, B) -> C) -> C {
+        let g = self.f
+        self.it.fold(init, |acc: C, x: A| -> C { f(acc, g(x)) })
+    }
 }
 
 pub struct Filtered<I, A> {
@@ -360,6 +360,10 @@ impl<I: Iterator, A> Iterator for Filtered<I, A> {
                 None -> return None
             }
         }
+    }
+    fn fold<B>(self, init: B, f: fn(B, A) -> B) -> B {
+        let p = self.f
+        self.it.fold(init, |acc: B, x: A| -> B { if p(x) { f(acc, x) } else { acc } })
     }
 }
 
@@ -826,11 +830,7 @@ impl StrBuilder {
     pub fn push(self, s: Str) {
         let n = __str_len(s)
         self.reserve(n)
-        var i = 0
-        while i < n {
-            __bytes_set(self.buf, self.len + i, __str_byte(s, i))
-            i += 1
-        }
+        __bytes_copy_str(self.buf, self.len, s, 0, n)
         self.len += n
     }
     pub fn push_char(self, c: Char) {
@@ -1349,6 +1349,15 @@ impl<T> Iterator for ListIter<T> {
         self.i = i + 1
         Some(__array_get(self.list.data, i))
     }
+    fn fold<B>(self, init: B, f: fn(B, T) -> B) -> B {
+        var acc = init
+        while self.i < self.list.len {
+            let x = __array_get(self.list.data, self.i)
+            self.i += 1
+            acc = f(acc, x)
+        }
+        acc
+    }
 }
 
 impl<T> Iterable for List<T> {
@@ -1356,24 +1365,24 @@ impl<T> Iterable for List<T> {
     fn iter(self) -> ListIter<T> { ListIter { list: self, i: 0 } }
 }
 
+pub fn __list_oob(i: Int, len: Int) -> Never {
+    panic("index {i} out of bounds for list of length {len}")
+}
+
 impl<T> List<T> {
     pub fn new() -> List<T> { List { len: 0, data: __array_new(0) } }
     pub fn with_capacity(n: Int) -> List<T> { List { len: 0, data: __array_new(n) } }
     pub fn filled(n: Int, v: T) -> List<T> {
         let l: List<T> = List.with_capacity(n)
-        var i = 0
-        while i < n {
-            l.push(v)
-            i += 1
-        }
+        __array_fill(l.data, 0, v, n)
+        l.len = n
         l
     }
     pub fn len(self) -> Int { self.len }
     pub fn is_empty(self) -> Bool { self.len == 0 }
     fn check(self, i: Int) {
-        if i < 0 || i >= self.len {
-            panic("index {i} out of bounds for list of length {self.len}")
-        }
+        // one unsigned comparison covers i < 0; the message is built out of line so this stays inlinable
+        if __cast<Int, U32>(i) >= __cast<Int, U32>(self.len) { __list_oob(i, self.len) }
     }
     fn reserve(self, need: Int) {
         let cap = __array_len(self.data)
@@ -1586,7 +1595,39 @@ impl<T> List<T> {
         self.sort_by(|a, b| key(a).cmp(key(b)))
     }
     pub fn sort(self) {
-        self.sort_by(|a, b| a.cmp(b))
+        // the same stable merge sort as sort_by, comparing with `<` directly: generic code is
+        // elaborated per type, so for numbers this is one instruction instead of a closure call
+        let n = self.len
+        if n < 2 { return }
+        var src = self.data
+        var dst: Array<T> = __array_new(n)
+        var width = 1
+        while width < n {
+            var lo = 0
+            while lo < n {
+                let mid = if lo + width < n { lo + width } else { n }
+                let hi = if lo + 2 * width < n { lo + 2 * width } else { n }
+                var i = lo
+                var j = mid
+                var k = lo
+                while k < hi {
+                    if i < mid && (j >= hi || !(__array_get(src, j) < __array_get(src, i))) {
+                        __array_set(dst, k, __array_get(src, i))
+                        i += 1
+                    } else {
+                        __array_set(dst, k, __array_get(src, j))
+                        j += 1
+                    }
+                    k += 1
+                }
+                lo = hi
+            }
+            let t = src
+            src = dst
+            dst = t
+            width *= 2
+        }
+        self.data = src
     }
     pub fn sorted(self) -> List<T> {
         let out = self.copy()
@@ -2092,6 +2133,20 @@ impl<T> Iterator for RangeIter<T> {
             self.cur = c + 1
         }
         Some(c)
+    }
+    fn fold<B>(self, init: B, f: fn(B, T) -> B) -> B {
+        var acc = init
+        if self.done { return acc }
+        var c = self.cur
+        while c < self.end {
+            acc = f(acc, c)
+            c = c + 1
+        }
+        // the inclusive end is visited without incrementing past it, so `..=MAX` cannot overflow
+        if self.inclusive && c == self.end { acc = f(acc, c) }
+        self.cur = c
+        self.done = true
+        acc
     }
 }
 

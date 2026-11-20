@@ -1,0 +1,38 @@
+import std.time
+
+enum Tree {
+    Leaf
+    Node(Tree, Tree)
+}
+
+fn make(d: Int) -> Tree {
+    if d == 0 { Tree.Node(Tree.Leaf, Tree.Leaf) } else { Tree.Node(make(d - 1), make(d - 1)) }
+}
+
+fn check(t: Tree) -> Int {
+    match t {
+        Tree.Leaf -> 0
+        Tree.Node(l, r) -> 1 + check(l) + check(r)
+    }
+}
+
+fn main() {
+    let t = time.monotonic_ms()
+    let max_d = 18
+    var total = check(make(max_d + 1))
+    let long_lived = make(max_d)
+    var d = 4
+    while d <= max_d {
+        let iters = 1 << (max_d - d + 4)
+        var sum = 0
+        var i = 0
+        while i < iters {
+            sum += check(make(d))
+            i += 1
+        }
+        total += sum
+        d += 2
+    }
+    total += check(long_lived)
+    print("trees {total} {time.monotonic_ms() - t}")
+}

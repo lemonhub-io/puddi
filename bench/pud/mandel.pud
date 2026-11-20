@@ -1,0 +1,28 @@
+import std.time
+
+fn main() {
+    let t = time.monotonic_ms()
+    let size = 2000
+    var inside = 0
+    var py = 0
+    while py < size {
+        let ci: Float = 2.0 * py / size - 1.0
+        var px = 0
+        while px < size {
+            let cr: Float = 2.0 * px / size - 1.5
+            var zr = 0.0
+            var zi = 0.0
+            var k = 0
+            while k < 50 && zr * zr + zi * zi <= 4.0 {
+                let nr = zr * zr - zi * zi + cr
+                zi = 2.0 * zr * zi + ci
+                zr = nr
+                k += 1
+            }
+            if k == 50 { inside += 1 }
+            px += 1
+        }
+        py += 1
+    }
+    print("mandel {inside} {time.monotonic_ms() - t}")
+}

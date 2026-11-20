@@ -4,6 +4,18 @@ All notable changes to Puddi are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Performance
+
+Measured with the programs in `bench/` against Rust and MoonBit; see `bench/README.md`.
+
+- `pud run` uses Wasmtime's copying garbage collector instead of deferred reference counting, enables Cranelift's inliner and starts with a 16 MiB GC heap: up to 20x faster on allocation-heavy code
+- Compiled machine code is cached per component in the user cache directory, so running an unchanged program again skips Cranelift (`PUD_NO_CACHE=1` turns this off)
+- Payload-less enum variants (`None`, `Ordering.Less`, ...) are shared instead of allocated on every use
+- Integer overflow checks for `Int` addition and subtraction are emitted inline, and left out where the operands' ranges show they cannot overflow (for example `i += 1` inside `while i < n`)
+- `list[i]` compiles to a single unsigned bounds check and an array access instead of calls through `Index`; `for x in list` walks the list by index without allocating an `Option` per element
+- Iterator adapters implement `fold` by internal iteration, so chains ending in `fold`, `count`, `collect` or `for_each` allocate nothing per element
+- `List.sort` compares with `<` directly instead of through a closure; `List.filled` and `StrBuilder.push` copy in bulk
+
 ### Documentation
 
 - Documentation site at https://puddi-lang.github.io/puddi-docs/ with a language guide, toolchain and standard library pages, built from [puddi-lang/puddi-docs](https://github.com/puddi-lang/puddi-docs)

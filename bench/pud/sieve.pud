@@ -1,0 +1,27 @@
+import std.time
+
+fn main() {
+    let t = time.monotonic_ms()
+    let n = 10_000_000
+    let flags = List.filled(n + 1, true)
+    flags[0] = false
+    flags[1] = false
+    var i = 2
+    while i * i <= n {
+        if flags[i] {
+            var j = i * i
+            while j <= n {
+                flags[j] = false
+                j += i
+            }
+        }
+        i += 1
+    }
+    var count = 0
+    var k = 0
+    while k <= n {
+        if flags[k] { count += 1 }
+        k += 1
+    }
+    print("sieve {count} {time.monotonic_ms() - t}")
+}

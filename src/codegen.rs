@@ -32,6 +32,8 @@ struct Cg<'a> {
     global_names: HashSet<String>,
     shims: HashMap<FnInst, String>,
     vtable_globals: HashMap<(Ty, TraitRef), String>,
+    /// one shared instance per payload-less enum variant, so `None` or `Ordering.Less` never allocates
+    unit_variants: HashMap<String, String>,
     func_names: Vec<String>,
     extern_count: usize,
 }
@@ -44,6 +46,10 @@ struct FnState {
     temps: Vec<(String, String)>,
     label: u32,
     loop_types: HashMap<LabelId, Ty>,
+    /// scratch locals (a, b, result) for inline overflow checks; never live across them
+    ovf_tmps: Option<(String, String, String)>,
+    /// known value ranges of integer locals, to leave out overflow checks that cannot fail
+    ranges: crate::ranges::Ranges,
 }
 
 impl FnState {
@@ -348,7 +354,7 @@ impl<'a> Cg<'a> {
             self.gen_extern(&name, f, m, n);
             return;
         }
-        let mut st = FnState { out: String::new(), indent: 1, locals: f.locals.clone(), local_names: Vec::new(), temps: Vec::new(), label: 0, loop_types: HashMap::new() };
+        let mut st = FnState { out: String::new(), indent: 1, locals: f.locals.clone(), local_names: Vec::new(), temps: Vec::new(), label: 0, loop_types: HashMap::new(), ovf_tmps: None, ranges: Default::default() };
         for (i, l) in f.locals.iter().enumerate() {
             st.local_names.push(format!("$l{i}.{}", sanitize(&l.name)));
         }
@@ -550,6 +556,7 @@ impl<'a> Cg<'a> {
                     self.gen_expr(st, v);
                     st.emit(&format!("local.set {n}"));
                 }
+                st.ranges.kill(*id);
                 st.emit("i32.const 0");
             }
             ExprKind::Call(inst, args) => {
@@ -613,6 +620,15 @@ impl<'a> Cg<'a> {
                 }
                 let n = self.tname(&e.ty);
                 st.emit(&format!("struct.new {n}"));
+            }
+            ExprKind::EnumNew(vi, vals) if vals.is_empty() => {
+                let v = format!("{}#{vi}", self.tname(&e.ty));
+                let next = self.unit_variants.len();
+                let g = self.unit_variants.entry(v.clone()).or_insert_with(|| format!("$unitv{next}")).clone();
+                if self.unit_variants.len() > next {
+                    self.globals.push(format!("(global {g} (ref {v}) (struct.new {v} (i32.const {vi})))"));
+                }
+                st.emit(&format!("global.get {g}"));
             }
             ExprKind::EnumNew(vi, vals) => {
                 let n = self.tname(&e.ty);
@@ -679,17 +695,22 @@ impl<'a> Cg<'a> {
             }
             ExprKind::If(c, t, el) => {
                 self.gen_expr(st, c);
+                let saved = st.ranges.save();
                 let rv = self.vt(&e.ty);
                 st.emit(&format!("(if (result {rv})"));
                 st.indent += 1;
                 st.emit("(then");
                 st.indent += 1;
+                st.ranges.assume(c, true, &st.locals);
                 self.gen_expr(st, t);
+                st.ranges.restore(&saved);
                 st.indent -= 1;
                 st.emit(")");
                 st.emit("(else");
                 st.indent += 1;
+                st.ranges.assume(c, false, &st.locals);
                 self.gen_expr(st, el);
+                st.ranges.restore(&saved);
                 st.indent -= 1;
                 st.emit(")");
                 st.indent -= 1;
@@ -728,6 +749,7 @@ impl<'a> Cg<'a> {
                 st.indent += 1;
                 st.emit(&format!("loop $cont{label}"));
                 st.indent += 1;
+                st.ranges.enter_loop(body);
                 self.gen_expr(st, body);
                 st.emit(&format!("drop br $cont{label}"));
                 st.indent -= 1;
@@ -1029,7 +1051,24 @@ impl<'a> Cg<'a> {
                             PrimOp::Sub => "sub",
                             _ => "mul",
                         };
-                        st.emit(&format!("call $chk_{o}_{}", it.name()));
+                        if st.ranges.cannot_overflow(op, *it, &args[0], &args[1]) {
+                            st.emit(&format!("{pre}.{o}"));
+                        } else if *it == IntTy::I32 && o != "mul" {
+                            // inline: r = a op b; overflow iff the sign bit of
+                            // (a ^ r) & (b ^ r) (add) or (a ^ b) & (a ^ r) (sub) is set
+                            let (a, b, r) = match &st.ovf_tmps {
+                                Some(t) => t.clone(),
+                                None => {
+                                    let t = (self.temp_raw(st, "i32"), self.temp_raw(st, "i32"), self.temp_raw(st, "i32"));
+                                    st.ovf_tmps = Some(t.clone());
+                                    t
+                                }
+                            };
+                            let mix = if o == "add" { format!("local.get {a} local.get {r} i32.xor local.get {b} local.get {r} i32.xor") } else { format!("local.get {a} local.get {b} i32.xor local.get {a} local.get {r} i32.xor") };
+                            st.emit(&format!("local.set {b} local.tee {a} local.get {b} i32.{o} local.set {r} {mix} i32.and i32.const 0 i32.lt_s (if (then call $rt_overflow)) local.get {r}"));
+                        } else {
+                            st.emit(&format!("call $chk_{o}_{}", it.name()));
+                        }
                     }
                     PrimOp::Neg => {
                         // 0 - x
@@ -1264,6 +1303,21 @@ impl<'a> Cg<'a> {
                 }
                 let an = self.tname(&args[0].ty);
                 st.emit(&format!("array.copy {an} {an} i32.const 0"));
+            }
+            "array_fill" => {
+                for a in args {
+                    self.gen_expr(st, a);
+                }
+                let an = self.tname(&args[0].ty);
+                st.emit(&format!("array.fill {an} i32.const 0"));
+            }
+            "bytes_copy_str" => {
+                for a in args {
+                    self.gen_expr(st, a);
+                }
+                let an = self.tname(&Ty::Array(Box::new(Ty::Int(IntTy::U8))));
+                let sn = self.tname(&Ty::Str);
+                st.emit(&format!("array.copy {an} {sn} i32.const 0"));
             }
             "str_len" => {
                 self.gen_expr(st, &args[0]);
@@ -1665,11 +1719,33 @@ impl<'a> Cg<'a> {
             for o in ["add", "sub", "mul"] {
                 let (vt, body) = ovf_body(it, o);
                 let _ = writeln!(s, "(func $ovf_{o}_{n} (param $a {vt}) (param $b {vt}) (result i32)\n{body})");
-                let wop = if it.is64() { format!("i64.{o}") } else { format!("i32.{o}") };
-                let _ = writeln!(s, "(func $chk_{o}_{n} (param $a {vt}) (param $b {vt}) (result {vt})\n  local.get $a local.get $b call $ovf_{o}_{n} (if (then call $rt_overflow))\n  local.get $a local.get $b {wop})");
+                let _ = writeln!(s, "(func $chk_{o}_{n} (param $a {vt}) (param $b {vt}) (result {vt})\n{})", chk_body(it, o));
             }
         }
         s
+    }
+}
+
+/// Body of `$chk_<op>_<type>`: the checked operation, computed once. Kept to a few
+/// instructions so that engines inline it.
+fn chk_body(it: IntTy, o: &str) -> String {
+    const TRAP: &str = "(if (then call $rt_overflow))";
+    match (it, o) {
+        (IntTy::I32, "add") => format!("  (local $r i32) local.get $a local.get $b i32.add local.set $r\n  local.get $a local.get $r i32.xor local.get $b local.get $r i32.xor i32.and i32.const 0 i32.lt_s {TRAP}\n  local.get $r"),
+        (IntTy::I32, "sub") => format!("  (local $r i32) local.get $a local.get $b i32.sub local.set $r\n  local.get $a local.get $b i32.xor local.get $a local.get $r i32.xor i32.and i32.const 0 i32.lt_s {TRAP}\n  local.get $r"),
+        (IntTy::I64, "add") => format!("  (local $r i64) local.get $a local.get $b i64.add local.set $r\n  local.get $a local.get $r i64.xor local.get $b local.get $r i64.xor i64.and i64.const 0 i64.lt_s {TRAP}\n  local.get $r"),
+        (IntTy::I64, "sub") => format!("  (local $r i64) local.get $a local.get $b i64.sub local.set $r\n  local.get $a local.get $b i64.xor local.get $a local.get $r i64.xor i64.and i64.const 0 i64.lt_s {TRAP}\n  local.get $r"),
+        (IntTy::U32, "add") => format!("  (local $r i32) local.get $a local.get $b i32.add local.tee $r local.get $a i32.lt_u {TRAP}\n  local.get $r"),
+        (IntTy::U64, "add") => format!("  (local $r i64) local.get $a local.get $b i64.add local.tee $r local.get $a i64.lt_u {TRAP}\n  local.get $r"),
+        (IntTy::U32, "sub") => format!("  local.get $a local.get $b i32.lt_u {TRAP}\n  local.get $a local.get $b i32.sub"),
+        (IntTy::U64, "sub") => format!("  local.get $a local.get $b i64.lt_u {TRAP}\n  local.get $a local.get $b i64.sub"),
+        (IntTy::I64 | IntTy::U64, _) => format!("  local.get $a local.get $b call $ovf_{o}_{} {TRAP}\n  local.get $a local.get $b i64.{o}", it.name()),
+        _ => {
+            // narrow types: exact result in i64, range check, then back to i32
+            let ext = if it.signed() { "i64.extend_i32_s" } else { "i64.extend_i32_u" };
+            let (lo, hi) = (it.min(), it.max());
+            format!("  (local $r i64) local.get $a {ext} local.get $b {ext} i64.{o} local.set $r\n  local.get $r i64.const {lo} i64.lt_s local.get $r i64.const {hi} i64.gt_s i32.or {TRAP}\n  local.get $r i32.wrap_i64")
+        }
     }
 }
 
@@ -1718,6 +1794,7 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         global_names: HashSet::new(),
         shims: HashMap::new(),
         vtable_globals: HashMap::new(),
+        unit_variants: HashMap::new(),
         func_names: Vec::new(),
         extern_count: 0,
         tail: String::new(),
