@@ -5,7 +5,7 @@ import std.http
 import std.worker
 
 async fn job(i: Int, out: List<Str>) -> Int {
-    time.sleep(30 - i * 10).await
+    time.sleep(300 - i * 100).await
     out.push("job{i}")
     i
 }
@@ -24,8 +24,10 @@ export async fn run_jobs(n: Int) -> List<Str> {
     task.scope(async |s| {
         for i in 0..n { s.spawn(job(i, out)) }
     }).await
-    // timed without the worker, whose start-up time depends on the host
-    out.push("concurrent {time.monotonic_ms() - t0 < 55.0}")
+    // timed without the worker, whose start-up time depends on the host; sleeps
+    // are long enough for coarse timers (about 16 ms on Windows), and run one
+    // after another they would take 600 ms
+    out.push("concurrent {time.monotonic_ms() - t0 < 450.0}")
     task.scope(async |s| {
         let w = s.worker(squarer)
         w.send(7)
