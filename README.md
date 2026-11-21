@@ -20,7 +20,7 @@ fn main() {
 }
 ```
 
-**[Documentation](https://puddi-lang.github.io/puddi-docs/)** · [Language specification](SPEC.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+**[Documentation](https://puddi-lang.github.io/puddi-docs/)** · **[简体中文文档](https://puddi-lang.github.io/puddi-docs/zh-CN/)** · [Language specification](SPEC.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 ## Install
 

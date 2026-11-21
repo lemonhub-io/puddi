@@ -31,5 +31,5 @@ The install scripts download `releases/latest`, so a new release is picked up by
 
 ## After the release
 
-- In [puddi-docs](https://github.com/puddi-lang/puddi-docs), set `PUDDI_VERSION` to the new tag and update pages for changed behavior. Its CI compiles every example with that release, so it shows which pages need attention.
+- In [puddi-docs](https://github.com/puddi-lang/puddi-docs), set `PUDDI_VERSION` to the new tag, update the Simplified Chinese specification and changelog with their release markers, and revise affected chapters in both editions. CI checks the examples against the new release.
 - If something went wrong, delete the GitHub release and the tag, fix the problem on `main`, and tag again. Do not move a tag that has been public for a while; release a patch version instead.
