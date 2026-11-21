@@ -22,7 +22,7 @@ Measured with the programs in `bench/` against Rust and MoonBit; see `bench/READ
 - `pud build` and `pud run` reuse the previous build when the sources, WIT files, target and compiler are unchanged: running an unchanged `hello` takes 25 ms instead of 160 ms
 - Wasmtime keeps compiled machine code per function, so after an edit only the changed functions are compiled again; Cranelift's own inliner is off, which makes compiling 1.7x faster at the same speed
 - Large source files are lexed and parsed in pieces on several threads
-- The generated WebAssembly text is assembled by `src/asm.rs` on several threads instead of the `wat` crate, 10x faster with byte-identical code (`PUD_WAT=1` uses `wat`, `PUD_ASM_CHECK=1` compares both); a 2,000-function program builds in 290 ms instead of 570 ms
+- The generated WebAssembly text is assembled by `src/asm.rs` on several threads instead of the `wat` crate, 10x faster with byte-identical code (`PUD_WAT=1` uses `wat`, `PUD_ASM_CHECK=1` compares both); functions are also turned into WebAssembly text on several threads, with the same result as on one; a 2,000-function program builds in 250 ms instead of 570 ms
 - `bench/compile.mjs` compares the edit-compile-run loop with `cargo` and `moon`
 
 ### Documentation

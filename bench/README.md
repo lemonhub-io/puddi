@@ -91,21 +91,21 @@ node compile.mjs --reps 3 --pud path/to/pud
 
 | program | step | cargo (Rust) | moon (MoonBit) | pud (Puddi) |
 |---|---|---|---|---|
-| hello | check (cold) | 254 | 175 | 48 |
-| hello | edit, check | 181 | 156 | 48 |
-| hello | build (cold) | 371 | 183 | 66 |
-| hello | edit, run | 440 | 212 | 111 |
-| hello | run again | 125 | 116 | 29 |
-| gen200 | check (cold) | 384 | 225 | 59 |
-| gen200 | edit, check | 225 | 203 | 60 |
-| gen200 | build (cold) | 638 | 252 | 91 |
-| gen200 | edit, run | 583 | 277 | 145 |
-| gen200 | run again | 129 | 116 | 34 |
-| gen2000 | check (cold) | 1602 | 776 | 141 |
-| gen2000 | edit, check | 687 | 749 | 143 |
-| gen2000 | build (cold) | 3168 | 1127 | 290 |
-| gen2000 | edit, run | 2344 | 1182 | 559 |
-| gen2000 | run again | 131 | 144 | 54 |
+| hello | check (cold) | 254 | 179 | 49 |
+| hello | edit, check | 179 | 160 | 48 |
+| hello | build (cold) | 372 | 187 | 64 |
+| hello | edit, run | 473 | 217 | 110 |
+| hello | run again | 128 | 121 | 30 |
+| gen200 | check (cold) | 382 | 224 | 61 |
+| gen200 | edit, check | 226 | 207 | 61 |
+| gen200 | build (cold) | 638 | 257 | 84 |
+| gen200 | edit, run | 585 | 287 | 138 |
+| gen200 | run again | 126 | 121 | 32 |
+| gen2000 | check (cold) | 1556 | 770 | 143 |
+| gen2000 | edit, check | 685 | 768 | 145 |
+| gen2000 | build (cold) | 3113 | 1145 | 253 |
+| gen2000 | edit, run | 2385 | 1178 | 523 |
+| gen2000 | run again | 132 | 147 | 43 |
 
 Release builds take about as long as debug builds for these programs (`cargo build --release` 3.1 s and `moon build --release` 1.2 s on gen2000); `moon build --target native --release` takes 13 s there, most of it in the C compiler. Puddi has a single build mode.
 
@@ -114,6 +114,7 @@ Puddi checks 4 to 11 times faster than `cargo` and 3 to 5 times faster than `moo
 - `pud build` and `pud run` reuse the previous build when no input changed (sources, WIT files, target, compiler), so `run again` costs only start-up
 - Wasmtime keeps Cranelift's output per function, so after an edit only changed functions are compiled to machine code again; an unchanged program loads its cached machine code directly
 - large source files (the prelude, big user files) are lexed and parsed in pieces on several threads
-- `src/asm.rs` turns the generated WebAssembly text into binary on several threads, 10x faster than the `wat` crate and with the same output
+- functions are turned into WebAssembly text on several threads, each with its own copy of the code generator's state, and the results are merged in function order, so the text is the same as from one thread
+- `src/asm.rs` turns that text into binary on several threads, 10x faster than the `wat` crate and with the same output
 
-For gen2000, `PUD_TIME=1` shows where the 250 ms of a build go: elaboration 60, optimization 30, generating WebAssembly text 70, assembling 15.
+For gen2000, `PUD_TIME=1` shows where the 215 ms of a build go: elaboration 60, optimization 30, generating WebAssembly text 25, assembling 15, the rest in parsing, WIT bindings and component encoding.

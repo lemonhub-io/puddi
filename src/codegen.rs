@@ -14,18 +14,27 @@ pub struct Output {
     pub tests: Vec<(String, String)>,
 }
 
+/// Code generation state. The vectors `types`, `funcs`, `data`, `globals`, `imports` and
+/// `new_refs` collect output; the maps and sets remember what was already defined, so that
+/// several copies of the state can generate functions in parallel and their outputs can be
+/// merged afterwards (see `generate`).
+#[derive(Clone)]
 struct Cg<'a> {
     tail: String,
     component: bool,
     prog: &'a Program,
     g: &'a Global<'a>,
-    types: Vec<String>,
+    /// (name, definition)
+    types: Vec<(String, String)>,
     type_names: HashMap<String, String>,
     defined: HashSet<String>,
     funcs: Vec<String>,
-    data: Vec<Vec<u8>>,
-    data_map: HashMap<Vec<u8>, usize>,
+    /// (name, bytes)
+    data: Vec<(String, Vec<u8>)>,
+    data_map: HashMap<Vec<u8>, String>,
+    data_names: HashSet<String>,
     refs: HashSet<String>,
+    new_refs: Vec<String>,
     imports: Vec<String>,
     globals: Vec<String>,
     exports: Vec<String>,
@@ -35,7 +44,6 @@ struct Cg<'a> {
     /// one shared instance per payload-less enum variant, so `None` or `Ordering.Less` never allocates
     unit_variants: HashMap<String, String>,
     func_names: Vec<String>,
-    extern_count: usize,
 }
 
 struct FnState {
@@ -185,7 +193,7 @@ impl<'a> Cg<'a> {
 
     fn add_type(&mut self, name: &str, def: String) {
         if self.defined.insert(name.to_string()) {
-            self.types.push(format!("(type {name} {def})"));
+            self.types.push((name.to_string(), format!("(type {name} {def})")));
         }
     }
 
@@ -350,19 +358,38 @@ impl<'a> Cg<'a> {
         out
     }
 
-    fn data_seg(&mut self, bytes: &[u8]) -> usize {
-        if let Some(&i) = self.data_map.get(bytes) {
-            return i;
+    /// The name of a passive data segment holding `bytes`. Names come from the contents,
+    /// so that functions generated in parallel agree on them.
+    fn data_seg(&mut self, bytes: &[u8]) -> String {
+        if let Some(n) = self.data_map.get(bytes) {
+            return n.clone();
         }
-        self.data.push(bytes.to_vec());
-        self.data_map.insert(bytes.to_vec(), self.data.len() - 1);
-        self.data.len() - 1
+        use std::hash::{Hash, Hasher};
+        let mut name = String::from("$d.");
+        for salt in [0u8, 1] {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (salt, bytes).hash(&mut h);
+            let _ = write!(name, "{:016x}", h.finish());
+        }
+        while !self.data_names.insert(name.clone()) {
+            name.push('x');
+        }
+        self.data.push((name.clone(), bytes.to_vec()));
+        self.data_map.insert(bytes.to_vec(), name.clone());
+        name
+    }
+
+    fn add_ref(&mut self, f: String) {
+        if !self.refs.contains(&f) {
+            self.refs.insert(f.clone());
+            self.new_refs.push(f);
+        }
     }
 
     fn str_lit(&mut self, st: &mut FnState, s: &str) {
         let d = self.data_seg(s.as_bytes());
         let sn = self.tname(&Ty::Str);
-        st.emit(&format!("i32.const 0 i32.const {} array.new_data {sn} $d{d}", s.len()));
+        st.emit(&format!("i32.const 0 i32.const {} array.new_data {sn} {d}", s.len()));
     }
 
     fn fname(&self, inst: &FnInst) -> String {
@@ -467,8 +494,7 @@ impl<'a> Cg<'a> {
     }
 
     fn gen_extern(&mut self, name: &str, f: &Func, module: &str, field: &str) {
-        self.extern_count += 1;
-        let imp_name = format!("$ext{}", self.extern_count);
+        let imp_name = format!("$ext.{}", &name[1..]);
         let mut ip = Vec::new();
         for &p in &f.params {
             let t = &f.locals[p].ty;
@@ -609,13 +635,13 @@ impl<'a> Cg<'a> {
             ExprKind::FnValue(inst) => {
                 let shim = self.fn_shim(inst, &e.ty);
                 let clo = self.tname(&e.ty);
-                self.refs.insert(shim.clone());
+                self.add_ref(shim.clone());
                 st.emit(&format!("ref.func {shim} ref.null struct struct.new {clo}"));
             }
             ExprKind::Closure { func, captures } => {
                 let clo = self.tname(&e.ty);
                 let fname = self.func_names[*func].clone();
-                self.refs.insert(fname.clone());
+                self.add_ref(fname.clone());
                 st.emit(&format!("ref.func {fname}"));
                 if captures.is_empty() {
                     st.emit("ref.null struct");
@@ -647,7 +673,7 @@ impl<'a> Cg<'a> {
             ExprKind::EnumNew(vi, vals) if vals.is_empty() => {
                 let v = format!("{}#{vi}", self.tname(&e.ty));
                 let next = self.unit_variants.len();
-                let g = self.unit_variants.entry(v.clone()).or_insert_with(|| format!("$unitv{next}")).clone();
+                let g = self.unit_variants.entry(v.clone()).or_insert_with(|| format!("$unitv.{}", &v[1..])).clone();
                 if self.unit_variants.len() > next {
                     self.globals.push(format!("(global {g} (ref {v}) (struct.new {v} (i32.const {vi})))"));
                 }
@@ -1241,7 +1267,9 @@ impl<'a> Cg<'a> {
         if let Some(g) = self.vtable_globals.get(&key) {
             return g.clone();
         }
-        let gname = format!("$vtg{}", self.vtable_globals.len());
+        // named after the key, so that functions generated in parallel agree on the names
+        let vkey = format!("{}.{}", sanitize(&self.mangle(concrete)), sanitize(&self.mangle(dyn_ty)));
+        let gname = format!("$vtg.{vkey}");
         let Ty::Dyn(tid, targs, assoc) = dyn_ty else { return gname };
         let sigs = self.dyn_sigs(*tid, targs, assoc, dyn_ty);
         let methods = self.g.vtables.get(&key).cloned().unwrap_or_default();
@@ -1249,7 +1277,7 @@ impl<'a> Cg<'a> {
         self.tname(dyn_ty);
         let mut fields = Vec::new();
         for (mi, (mname, ps, r)) in sigs.iter().enumerate() {
-            let shim = format!("$vshim{}.{mi}", self.vtable_globals.len());
+            let shim = format!("$vshim.{vkey}.{mi}");
             let ft = self.fn_type(ps, r, "anyref");
             let mut s = format!("(func {shim} (type {ft}) (param $self anyref)");
             for (i, p) in ps.iter().enumerate() {
@@ -1278,7 +1306,7 @@ impl<'a> Cg<'a> {
                 }
             }
             self.funcs.push(s);
-            self.refs.insert(shim.clone());
+            self.add_ref(shim.clone());
             fields.push(format!("(ref.func {shim})"));
         }
         self.globals.push(format!("(global {gname} (ref {vt_name}) (struct.new {vt_name} {}))", fields.join(" ")));
@@ -1654,7 +1682,7 @@ impl<'a> Cg<'a> {
   i32.const 0 local.get $s i32.const 0 call $rt_to_mem_at call $host_panic
   unreachable)
 (func $rt_overflow
-  i32.const 0 i32.const 16 array.new_data {sn} $d{ovf} call $rt_panic)
+  i32.const 0 i32.const 16 array.new_data {sn} {ovf} call $rt_panic)
 (func $rt_str_eq (param $a (ref {sn})) (param $b (ref {sn})) (result i32)
   (local $n i32) (local $i i32)
   local.get $a local.get $b ref.eq (if (then i32.const 1 return))
@@ -1808,6 +1836,127 @@ fn ovf_body(it: IntTy, o: &str) -> (&'static str, String) {
     }
 }
 
+/// What generating one function added to a copy of the state.
+struct Delta {
+    types: Vec<(String, String)>,
+    data: Vec<(String, Vec<u8>)>,
+    globals: Vec<String>,
+    imports: Vec<String>,
+    funcs: Vec<String>,
+    refs: Vec<String>,
+}
+
+/// Generates all functions on several threads, each with its own copy of the state, and
+/// merges what each function added in function order. Each thread takes functions in
+/// increasing order, so an item appears in the output where the sequential loop would put
+/// it: with the first function that uses it. Fails (and changes nothing) when there are
+/// too few functions to be worth it, or when two data segments' names collide.
+fn gen_parallel(cg: &mut Cg) -> Result<(), ()> {
+    let g = cg.g;
+    let order: Vec<usize> = (0..g.funcs.len()).filter(|&i| g.funcs[i].is_some()).collect();
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(order.len() / 64);
+    if threads < 2 || std::env::var_os("PUD_SERIAL_CODEGEN").is_some() {
+        return Err(());
+    }
+    let mut base = cg.clone();
+    base.types.clear();
+    base.data.clear();
+    base.globals.clear();
+    base.imports.clear();
+    base.funcs.clear();
+    base.new_refs.clear();
+    let base = &base;
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let order = &order;
+    let mut deltas: Vec<(usize, Delta)> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|_| {
+                let next = &next;
+                sc.spawn(move || {
+                    let mut w = base.clone();
+                    let mut mine = Vec::new();
+                    loop {
+                        let k = next.fetch_add(8, std::sync::atomic::Ordering::Relaxed);
+                        if k >= order.len() {
+                            break;
+                        }
+                        for (pos, &i) in order.iter().enumerate().skip(k).take(8) {
+                            w.gen_func(i, g.funcs[i].as_ref().unwrap());
+                            mine.push((
+                                pos,
+                                Delta {
+                                    types: std::mem::take(&mut w.types),
+                                    data: std::mem::take(&mut w.data),
+                                    globals: std::mem::take(&mut w.globals),
+                                    imports: std::mem::take(&mut w.imports),
+                                    funcs: std::mem::take(&mut w.funcs),
+                                    refs: std::mem::take(&mut w.new_refs),
+                                },
+                            ));
+                        }
+                    }
+                    mine
+                })
+            })
+            .collect();
+        hs.into_iter().flat_map(|h| h.join().unwrap()).collect()
+    });
+    deltas.sort_by_key(|d| d.0);
+    // data names come from contents: refuse a collision instead of merging it
+    let mut data_seen: HashMap<String, Vec<u8>> = cg.data.iter().cloned().collect();
+    for (_, d) in &deltas {
+        for (n, b) in &d.data {
+            if let Some(old) = data_seen.get(n) {
+                if old != b {
+                    return Err(());
+                }
+            } else {
+                data_seen.insert(n.clone(), b.clone());
+            }
+        }
+    }
+    let mut globals_seen: HashSet<String> = cg.globals.iter().cloned().collect();
+    let mut funcs_seen: HashSet<String> = HashSet::new();
+    let mut imports_seen: HashSet<String> = cg.imports.iter().cloned().collect();
+    for (_, d) in deltas {
+        for (n, t) in d.types {
+            if cg.defined.insert(n.clone()) {
+                cg.types.push((n, t));
+            }
+        }
+        for (n, b) in d.data {
+            if cg.data_names.insert(n.clone()) {
+                cg.data_map.insert(b.clone(), n.clone());
+                cg.data.push((n, b));
+            }
+        }
+        for x in d.globals {
+            if globals_seen.insert(x.clone()) {
+                cg.globals.push(x);
+            }
+        }
+        for x in d.imports {
+            if imports_seen.insert(x.clone()) {
+                cg.imports.push(x);
+            }
+        }
+        for f in d.funcs {
+            // shims can be generated by several threads; real functions are unique
+            let fname = f.get(6..).and_then(|r| r.split(' ').next()).unwrap_or("");
+            if fname.ends_with(".shim") || fname.starts_with("$vshim.") {
+                if !funcs_seen.insert(f.clone()) {
+                    continue;
+                }
+            }
+            cg.funcs.push(f);
+        }
+        for r in d.refs {
+            cg.refs.insert(r);
+        }
+    }
+    Ok(())
+}
+
 /// `plat`: in component builds, the platform functions (in `driver::PLATFORM_FNS` order)
 /// that implement the host operations inside the module.
 pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(String, usize)], plat: Option<&[usize]>) -> Result<Output, String> {
@@ -1820,7 +1969,9 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         funcs: Vec::new(),
         data: Vec::new(),
         data_map: HashMap::new(),
+        data_names: HashSet::new(),
         refs: HashSet::new(),
+        new_refs: Vec::new(),
         imports: Vec::new(),
         globals: Vec::new(),
         exports: Vec::new(),
@@ -1829,7 +1980,6 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         vtable_globals: HashMap::new(),
         unit_variants: HashMap::new(),
         func_names: Vec::new(),
-        extern_count: 0,
         tail: String::new(),
         component: plat.is_some(),
     };
@@ -1846,9 +1996,11 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         cg.func_names.push(format!("${base}#{i}"));
     }
     let runtime = cg.runtime();
-    for (i, f) in g.funcs.iter().enumerate() {
-        if let Some(f) = f {
-            cg.gen_func(i, f);
+    if gen_parallel(&mut cg).is_err() {
+        for (i, f) in g.funcs.iter().enumerate() {
+            if let Some(f) = f {
+                cg.gen_func(i, f);
+            }
         }
     }
     if let Some(e) = entry {
@@ -1932,7 +2084,7 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         out.push('\n');
     }
     out.push_str("(rec\n");
-    for t in &cg.types {
+    for (_, t) in &cg.types {
         out.push_str("  ");
         out.push_str(t);
         out.push('\n');
@@ -1962,8 +2114,8 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         out.push_str(e);
         out.push('\n');
     }
-    for (i, d) in cg.data.iter().enumerate() {
-        let _ = writeln!(out, "(data $d{i} {})", wat_str(d));
+    for (n, d) in &cg.data {
+        let _ = writeln!(out, "(data {n} {})", wat_str(d));
     }
     out.push_str(")\n");
     crate::driver::phase("codegen wat");
