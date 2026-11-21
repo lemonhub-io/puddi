@@ -1,0 +1,376 @@
+{
+ "reps": 3,
+ "lines": {
+  "hello": {
+   "rust": 4,
+   "moon": 4,
+   "pud": 4
+  },
+  "gen200": {
+   "rust": 3808,
+   "moon": 3807,
+   "pud": 5007
+  },
+  "gen2000": {
+   "rust": 38008,
+   "moon": 38007,
+   "pud": 50007
+  }
+ },
+ "times": {
+  "hello|check (cold)": {
+   "rust": [
+    282.1,
+    288.6,
+    278.6
+   ],
+   "moon": [
+    279.6,
+    192.8,
+    196.6
+   ],
+   "pud": [
+    58.7,
+    60.4,
+    57.6
+   ]
+  },
+  "hello|edit, check": {
+   "rust": [
+    200.9,
+    200.8,
+    200
+   ],
+   "moon": [
+    168.3,
+    184.7,
+    178.7
+   ],
+   "pud": [
+    56.9,
+    59.6,
+    59
+   ]
+  },
+  "hello|build (cold)": {
+   "rust": [
+    402,
+    414.3,
+    423.1
+   ],
+   "moon": [
+    201.8,
+    201.4,
+    209
+   ],
+   "pud": [
+    83.1,
+    83.7,
+    84.8
+   ]
+  },
+  "hello|edit, run": {
+   "rust": [
+    506.6,
+    466,
+    474.8
+   ],
+   "moon": [
+    238.3,
+    233.7,
+    227.9
+   ],
+   "pud": [
+    195,
+    84.6,
+    83.9
+   ]
+  },
+  "hello|run again": {
+   "rust": [
+    130.9,
+    139.7,
+    138.6
+   ],
+   "moon": [
+    125.4,
+    128.2,
+    132.9
+   ],
+   "pud": [
+    86.4,
+    83.4,
+    85.9
+   ]
+  },
+  "hello|release (cold)": {
+   "rust": [
+    406.2,
+    412.3,
+    416.2
+   ],
+   "moon": [
+    201.6,
+    204.8,
+    196.8
+   ]
+  },
+  "hello|release native (cold)": {
+   "moon": [
+    1164,
+    1029,
+    1113.3
+   ]
+  },
+  "gen200|check (cold)": {
+   "rust": [
+    418,
+    423.7,
+    433.6
+   ],
+   "moon": [
+    236.7,
+    247.2,
+    257.6
+   ],
+   "pud": [
+    72.7,
+    68.6,
+    69.2
+   ]
+  },
+  "gen200|edit, check": {
+   "rust": [
+    250.1,
+    246.8,
+    253.4
+   ],
+   "moon": [
+    220.1,
+    221.4,
+    221.4
+   ],
+   "pud": [
+    79.6,
+    72.8,
+    74.5
+   ]
+  },
+  "gen200|build (cold)": {
+   "rust": [
+    692.6,
+    723.1,
+    698.1
+   ],
+   "moon": [
+    278.2,
+    294.4,
+    307.1
+   ],
+   "pud": [
+    137.4,
+    125,
+    129.4
+   ]
+  },
+  "gen200|edit, run": {
+   "rust": [
+    703.3,
+    626.2,
+    631
+   ],
+   "moon": [
+    309.6,
+    320.8,
+    316
+   ],
+   "pud": [
+    361.1,
+    125,
+    141.1
+   ]
+  },
+  "gen200|run again": {
+   "rust": [
+    136.7,
+    134.9,
+    139
+   ],
+   "moon": [
+    136.4,
+    134.9,
+    129.8
+   ],
+   "pud": [
+    128.1,
+    127.5,
+    130.7
+   ]
+  },
+  "gen200|release (cold)": {
+   "rust": [
+    629,
+    641.9,
+    636
+   ],
+   "moon": [
+    290.5,
+    280.2,
+    275
+   ]
+  },
+  "gen200|release native (cold)": {
+   "moon": [
+    3036.7,
+    2953.3,
+    3047.1
+   ]
+  },
+  "gen2000|check (cold)": {
+   "rust": [
+    1746.9,
+    1743.1,
+    1753.9
+   ],
+   "moon": [
+    842.5,
+    830.2,
+    833.1
+   ],
+   "pud": [
+    203.9,
+    241.2,
+    226.1
+   ]
+  },
+  "gen2000|edit, check": {
+   "rust": [
+    749.9,
+    756,
+    747.7
+   ],
+   "moon": [
+    829,
+    829.3,
+    815.2
+   ],
+   "pud": [
+    211.9,
+    236.8,
+    232.4
+   ]
+  },
+  "gen2000|build (cold)": {
+   "rust": [
+    3431.5,
+    3390.4,
+    3515.9
+   ],
+   "moon": [
+    1266.6,
+    1265.8,
+    1256.6
+   ],
+   "pud": [
+    680.3,
+    565,
+    573.5
+   ]
+  },
+  "gen2000|edit, run": {
+   "rust": [
+    2624.1,
+    2605.4,
+    2593.2
+   ],
+   "moon": [
+    1270.9,
+    1290.8,
+    1301.7
+   ],
+   "pud": [
+    3070.1,
+    602.4,
+    566
+   ]
+  },
+  "gen2000|run again": {
+   "rust": [
+    148.6,
+    142.8,
+    142.1
+   ],
+   "moon": [
+    154.6,
+    159.4,
+    163.3
+   ],
+   "pud": [
+    667.6,
+    599,
+    553.6
+   ]
+  },
+  "gen2000|release (cold)": {
+   "rust": [
+    3505.8,
+    3347.5,
+    3272.3
+   ],
+   "moon": [
+    1271.9,
+    1336,
+    1348.7
+   ]
+  },
+  "gen2000|release native (cold)": {
+   "moon": [
+    14530.3,
+    13791.9,
+    13969.4
+   ]
+  }
+ },
+ "pudPhases": {
+  "hello": [
+   "[time] main 0.0 ms",
+   "[time] compile start 0.3 ms",
+   "[time] wit bindings 5.3 ms",
+   "[time] parse 16.2 ms",
+   "[time] program 18.7 ms",
+   "[time] elab 24.8 ms",
+   "[time] opt 27.7 ms",
+   "[time] codegen wat 32.4 ms",
+   "[time] codegen 42.3 ms",
+   "[time] component 45.7 ms",
+   "[time] built 49.8 ms"
+  ],
+  "gen200": [
+   "[time] main 0.0 ms",
+   "[time] compile start 0.4 ms",
+   "[time] wit bindings 10.6 ms",
+   "[time] parse 22.1 ms",
+   "[time] program 26.1 ms",
+   "[time] elab 38.3 ms",
+   "[time] opt 44.1 ms",
+   "[time] codegen wat 57.5 ms",
+   "[time] codegen 87.5 ms",
+   "[time] component 93.3 ms",
+   "[time] built 98.1 ms"
+  ],
+  "gen2000": [
+   "[time] main 0.0 ms",
+   "[time] compile start 0.6 ms",
+   "[time] wit bindings 65.3 ms",
+   "[time] parse 75.8 ms",
+   "[time] program 87.6 ms",
+   "[time] elab 157.7 ms",
+   "[time] opt 197.0 ms",
+   "[time] codegen wat 275.6 ms",
+   "[time] codegen 469.1 ms",
+   "[time] component 497.6 ms",
+   "[time] built 502.1 ms"
+  ]
+ },
+ "errors": []
+}

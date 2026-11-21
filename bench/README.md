@@ -80,3 +80,33 @@ The changes are listed in the changelog under Unreleased. In short: Wasmtime's c
 - **Start-up**: `pud run hello` takes 75 ms on Wasmtime, about 30 ms of it the process launch on Windows and 45 ms compiling (half of that in parsing the generated WIT bindings and the WAT text).
 - **Output size**: every Puddi program is about 230 KB (98 KB core module), against 0.3 to 13 KB for MoonBit's wasm-gc output, because the platform layer and runtime are linked in whole.
 - **Memory**: Puddi needs 26 MB (V8) or 52 MB (Wasmtime) for `hello`, against 6 MB for `moonrun`; most of it is the engine.
+
+## Compile time
+
+`compile.mjs` times the steps of the edit-compile-run loop with each language's own tool (`cargo`, `moon`, `pud`) on `hello` and on two generated programs with the same code in each language: 200 and 2,000 functions, each with a struct, an enum, a `match`, a loop, a closure and a generic call (about 3,800 and 38,000 lines of Rust). "cold" starts from a clean project; "edit" changes one line of one function in the warm project, so `cargo` and `moon` can reuse their incremental state. Median of 3, ms; raw data in `results/compile.json`.
+
+```sh
+node compile.mjs --reps 3 --pud path/to/pud
+```
+
+| program | step | cargo (Rust) | moon (MoonBit) | pud (Puddi) |
+|---|---|---|---|---|
+| hello | check (cold) | 282 | 197 | 59 |
+| hello | edit, check | 201 | 179 | 59 |
+| hello | build (cold) | 414 | 202 | 84 |
+| hello | edit, run | 475 | 234 | 85 |
+| hello | run again | 139 | 128 | 86 |
+| gen200 | check (cold) | 424 | 247 | 69 |
+| gen200 | edit, check | 250 | 221 | 75 |
+| gen200 | build (cold) | 698 | 294 | 129 |
+| gen200 | edit, run | 631 | 316 | 141 |
+| gen200 | run again | 137 | 135 | 128 |
+| gen2000 | check (cold) | 1747 | 833 | 226 |
+| gen2000 | edit, check | 750 | 829 | 232 |
+| gen2000 | build (cold) | 3432 | 1266 | 574 |
+| gen2000 | edit, run | 2605 | 1291 | 602 |
+| gen2000 | run again | 143 | 159 | 599 |
+
+Release builds take about as long as debug builds for these programs (`cargo build --release` 3.3 s and `moon build --release` 1.3 s on gen2000); `moon build --target native --release` takes 14 s there, most of it in the C compiler. Puddi has a single build mode.
+
+Puddi checks and builds 3 to 8 times faster than `cargo` and 2 to 4 times faster than `moon`, without incremental compilation: it recompiles the whole program every time. That is also why `run again` on an unchanged gen2000 takes 600 ms, where `cargo` and `moon` see nothing to rebuild. For gen2000 `PUD_TIME=1` shows where the 500 ms of a build go: elaboration 70, optimization 40, generating WAT text 80 and assembling it into binary 190.
