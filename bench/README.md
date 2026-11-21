@@ -39,17 +39,17 @@ Kernel time in ms (multiple of Rust):
 
 | | Rust | MoonBit native | MoonBit wasm-gc | Puddi on V8 | Puddi on Wasmtime |
 |---|---|---|---|---|---|
-| fib | 69 | 101 (1.5x) | 93 (1.3x) | 88 (1.3x) | 85 (1.2x) |
-| sieve | 20 | 23 (1.2x) | 48 (2.4x) | 43 (2.2x) | 48 (2.4x) |
-| nbody | 133 | 176 (1.3x) | 179 (1.3x) | 190 (1.4x) | 216 (1.6x) |
-| trees | 3936 | 2022 (0.5x) | 525 (0.1x) | 572 (0.1x) | 957 (0.2x) |
-| mandel | 135 | 138 (1.0x) | 335 (2.5x) | 139 (1.0x) | 197 (1.5x) |
-| hashmap | 39 | 279 (7.3x) | 264 (6.9x) | 48 (1.3x) | 75 (2.0x) |
-| strings | 14 | 115 (8.2x) | 63 (4.5x) | 77 (5.5x) | 89 (6.3x) |
-| sort | 14 | 73 (5.1x) | 79 (5.5x) | 21 (1.4x) | 41 (2.8x) |
-| iter | 7 | 59 (8.5x) | 58 (8.3x) | 10 (1.4x) | 11 (1.6x) |
-| dyn | 40 | 22 (0.5x) | 75 (1.9x) | 49 (1.2x) | 184 (4.5x) |
-| **geomean** | 1.00x | 2.10x | 2.28x | 1.26x | 1.84x |
+| fib | 69 | 101 (1.5x) | 93 (1.3x) | 90 (1.3x) | 87 (1.3x) |
+| sieve | 20 | 23 (1.2x) | 48 (2.4x) | 44 (2.2x) | 48 (2.4x) |
+| nbody | 133 | 176 (1.3x) | 179 (1.3x) | 191 (1.4x) | 215 (1.6x) |
+| trees | 3936 | 2022 (0.5x) | 525 (0.1x) | 565 (0.1x) | 946 (0.2x) |
+| mandel | 135 | 138 (1.0x) | 335 (2.5x) | 137 (1.0x) | 197 (1.5x) |
+| hashmap | 39 | 279 (7.3x) | 264 (6.9x) | 46 (1.2x) | 66 (1.7x) |
+| strings | 14 | 115 (8.2x) | 63 (4.5x) | 74 (5.3x) | 92 (6.6x) |
+| sort | 14 | 73 (5.1x) | 79 (5.5x) | 21 (1.4x) | 43 (3.0x) |
+| iter | 7 | 59 (8.5x) | 58 (8.3x) | 10 (1.4x) | 12 (1.7x) |
+| dyn | 40 | 22 (0.5x) | 75 (1.9x) | 52 (1.3x) | 187 (4.6x) |
+| **geomean** | 1.00x | 2.10x | 2.28x | 1.25x | 1.85x |
 
 `trees` is faster than Rust in every GC language because Rust frees each tree node by node, while a garbage collector discards a dead tree at once. The Rust programs are plain idiomatic code (std `HashMap` with SipHash, `Box`, `sort`), not tuned.
 
@@ -57,33 +57,33 @@ Kernel time in ms (multiple of Rust):
 
 | | 0.1.0 on V8 | now | 0.1.0 on Wasmtime | now |
 |---|---|---|---|---|
-| hello (wall) | 120 | 123 | 160 | 75 |
-| fib | 235 | 88 (2.7x) | 397 | 85 (4.7x) |
-| sieve | 183 | 43 (4.3x) | 230 | 48 (4.8x) |
-| nbody | 269 | 190 (1.4x) | 1099 | 216 (5.1x) |
-| trees | 993 | 572 (1.7x) | 2818 | 957 (2.9x) |
-| mandel | 385 | 139 (2.8x) | 327 | 197 (1.7x) |
-| hashmap | 89 | 48 (1.9x) | 160 | 75 (2.1x) |
-| strings | 115 | 77 (1.5x) | 148 | 89 (1.7x) |
-| sort | 260 | 21 (12.6x) | 5382 | 41 (132x) |
-| iter | 67 | 10 (7.0x) | 492 | 11 (45x) |
-| dyn | 147 | 49 (3.0x) | 539 | 184 (2.9x) |
-| **geomean vs Rust** | 3.98x | 1.26x | 11.03x | 1.84x |
+| hello (wall) | 120 | 116 | 160 | 25 |
+| fib | 235 | 90 (2.6x) | 397 | 87 (4.6x) |
+| sieve | 183 | 44 (4.2x) | 230 | 48 (4.8x) |
+| nbody | 269 | 191 (1.4x) | 1099 | 215 (5.1x) |
+| trees | 993 | 565 (1.8x) | 2818 | 946 (3.0x) |
+| mandel | 385 | 137 (2.8x) | 327 | 197 (1.7x) |
+| hashmap | 89 | 46 (1.9x) | 160 | 66 (2.4x) |
+| strings | 115 | 74 (1.6x) | 148 | 92 (1.6x) |
+| sort | 260 | 21 (12.4x) | 5382 | 43 (125x) |
+| iter | 67 | 10 (6.7x) | 492 | 12 (41x) |
+| dyn | 147 | 52 (2.8x) | 539 | 187 (2.9x) |
+| **geomean vs Rust** | 3.98x | 1.25x | 11.03x | 1.85x |
 
-The changes are listed in the changelog under Unreleased. In short: Wasmtime's copying collector instead of reference counting (reference-count barriers made `sort` take 5 s), Cranelift inlining, a 16 MiB starting GC heap, a compiled-code cache, shared instances for payload-less enum variants, inline overflow checks plus range analysis to drop impossible ones, direct `List` indexing, allocation-free `for` over lists, internal iteration for iterator chains, an IR optimizer that inlines closures and constructor matches (`src/opt.rs`), radix sort for integer lists, single-probe `Map` inserts, V8 without its Liftoff baseline tier, and a faster compiler start-up.
+The changes are listed in the changelog under Unreleased. In short: Wasmtime's copying collector instead of reference counting (reference-count barriers made `sort` take 5 s), a 16 MiB starting GC heap, a compiled-code cache, shared instances for payload-less enum variants, inline overflow checks plus range analysis to drop impossible ones, direct `List` indexing, allocation-free `for` over lists, internal iteration for iterator chains, an IR optimizer that inlines closures and constructor matches (`src/opt.rs`), radix sort for integer lists, single-probe `Map` inserts, V8 without its Liftoff baseline tier, and a faster compiler (see Compile time below). Cranelift's own inliner is off: with `opt.rs` it no longer makes a measurable difference, and it made compiling after each edit 1.7x slower.
 
 ### Remaining gaps
 
-- **`dyn` calls on Wasmtime** (4.5x): each call goes through a shim that casts `anyref` back to the concrete type, and Cranelift does not inline `call_ref`. Storing the vtable in the object would save the cast and one indirection.
+- **`dyn` calls on Wasmtime** (4.6x): each call goes through a shim that casts `anyref` back to the concrete type, and Cranelift does not inline `call_ref`. Storing the vtable in the object would save the cast and one indirection.
 - **`trees` on Wasmtime**: its copying collector grows the GC heap only when a collection frees too little, so it collects often near capacity; V8's generational collector is 1.7x faster here.
 - **`strings`** (5-6x): string building copies through linear memory and `Map<Str, Int>` hashes byte by byte.
-- **Start-up**: `pud run hello` takes 75 ms on Wasmtime, about 30 ms of it the process launch on Windows and 45 ms compiling (half of that in parsing the generated WIT bindings and the WAT text).
-- **Output size**: every Puddi program is about 230 KB (98 KB core module), against 0.3 to 13 KB for MoonBit's wasm-gc output, because the platform layer and runtime are linked in whole.
-- **Memory**: Puddi needs 26 MB (V8) or 52 MB (Wasmtime) for `hello`, against 6 MB for `moonrun`; most of it is the engine.
+- **Start-up**: `pud run hello` takes 25 ms when nothing changed and 110 ms after an edit, against 12 ms for a Rust binary; most of it is the process launch on Windows and loading Wasmtime.
+- **Output size**: every Puddi program is about 175 KB with its JavaScript loader, against 0.3 to 13 KB for MoonBit's wasm-gc output, because the platform layer and runtime are linked in whole.
+- **Memory**: Puddi needs 26 MB (V8) or 34 MB (Wasmtime) for `hello`, against 6 MB for `moonrun`; most of it is the engine.
 
 ## Compile time
 
-`compile.mjs` times the steps of the edit-compile-run loop with each language's own tool (`cargo`, `moon`, `pud`) on `hello` and on two generated programs with the same code in each language: 200 and 2,000 functions, each with a struct, an enum, a `match`, a loop, a closure and a generic call (about 3,800 and 38,000 lines of Rust). "cold" starts from a clean project; "edit" changes one line of one function in the warm project, so `cargo` and `moon` can reuse their incremental state. Median of 3, ms; raw data in `results/compile.json`.
+`compile.mjs` times the steps of the edit-compile-run loop with each language's own tool (`cargo`, `moon`, `pud`) on `hello` and on two generated programs with the same code in each language: 200 and 2,000 functions, each with a struct, an enum, a `match`, a loop, a closure and a generic call (about 3,800 and 38,000 lines of Rust). "cold" starts from a clean project; "edit" changes one line of one function in the warm project (always to text no earlier build has seen), so each tool can reuse its incremental state. `pud` gets a cache directory of its own. Median of 3, ms; raw data in `results/compile.json`.
 
 ```sh
 node compile.mjs --reps 3 --pud path/to/pud
@@ -91,22 +91,29 @@ node compile.mjs --reps 3 --pud path/to/pud
 
 | program | step | cargo (Rust) | moon (MoonBit) | pud (Puddi) |
 |---|---|---|---|---|
-| hello | check (cold) | 282 | 197 | 59 |
-| hello | edit, check | 201 | 179 | 59 |
-| hello | build (cold) | 414 | 202 | 84 |
-| hello | edit, run | 475 | 234 | 85 |
-| hello | run again | 139 | 128 | 86 |
-| gen200 | check (cold) | 424 | 247 | 69 |
-| gen200 | edit, check | 250 | 221 | 75 |
-| gen200 | build (cold) | 698 | 294 | 129 |
-| gen200 | edit, run | 631 | 316 | 141 |
-| gen200 | run again | 137 | 135 | 128 |
-| gen2000 | check (cold) | 1747 | 833 | 226 |
-| gen2000 | edit, check | 750 | 829 | 232 |
-| gen2000 | build (cold) | 3432 | 1266 | 574 |
-| gen2000 | edit, run | 2605 | 1291 | 602 |
-| gen2000 | run again | 143 | 159 | 599 |
+| hello | check (cold) | 254 | 175 | 48 |
+| hello | edit, check | 181 | 156 | 48 |
+| hello | build (cold) | 371 | 183 | 66 |
+| hello | edit, run | 440 | 212 | 111 |
+| hello | run again | 125 | 116 | 29 |
+| gen200 | check (cold) | 384 | 225 | 59 |
+| gen200 | edit, check | 225 | 203 | 60 |
+| gen200 | build (cold) | 638 | 252 | 91 |
+| gen200 | edit, run | 583 | 277 | 145 |
+| gen200 | run again | 129 | 116 | 34 |
+| gen2000 | check (cold) | 1602 | 776 | 141 |
+| gen2000 | edit, check | 687 | 749 | 143 |
+| gen2000 | build (cold) | 3168 | 1127 | 290 |
+| gen2000 | edit, run | 2344 | 1182 | 559 |
+| gen2000 | run again | 131 | 144 | 54 |
 
-Release builds take about as long as debug builds for these programs (`cargo build --release` 3.3 s and `moon build --release` 1.3 s on gen2000); `moon build --target native --release` takes 14 s there, most of it in the C compiler. Puddi has a single build mode.
+Release builds take about as long as debug builds for these programs (`cargo build --release` 3.1 s and `moon build --release` 1.2 s on gen2000); `moon build --target native --release` takes 13 s there, most of it in the C compiler. Puddi has a single build mode.
 
-Puddi checks and builds 3 to 8 times faster than `cargo` and 2 to 4 times faster than `moon`, without incremental compilation: it recompiles the whole program every time. That is also why `run again` on an unchanged gen2000 takes 600 ms, where `cargo` and `moon` see nothing to rebuild. For gen2000 `PUD_TIME=1` shows where the 500 ms of a build go: elaboration 70, optimization 40, generating WAT text 80 and assembling it into binary 190.
+Puddi checks 4 to 11 times faster than `cargo` and 3 to 5 times faster than `moon`, and goes from an edit to a running program about 2 times faster than `moon` and 4 times faster than `cargo`, although it recompiles the whole program every time. What makes this work:
+
+- `pud build` and `pud run` reuse the previous build when no input changed (sources, WIT files, target, compiler), so `run again` costs only start-up
+- Wasmtime keeps Cranelift's output per function, so after an edit only changed functions are compiled to machine code again; an unchanged program loads its cached machine code directly
+- large source files (the prelude, big user files) are lexed and parsed in pieces on several threads
+- `src/asm.rs` turns the generated WebAssembly text into binary on several threads, 10x faster than the `wat` crate and with the same output
+
+For gen2000, `PUD_TIME=1` shows where the 250 ms of a build go: elaboration 60, optimization 30, generating WebAssembly text 70, assembling 15.

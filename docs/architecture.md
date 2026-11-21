@@ -32,7 +32,7 @@ The prelude, standard modules and platform layer are embedded in the binary with
 
 ## Stages
 
-**Lexing and parsing** (`lexer.rs`, `parser.rs`, `ast.rs`). A hand-written tokenizer and recursive-descent parser produce the AST. Newline handling (SPEC 2.5) happens in the lexer: it decides whether a newline ends a statement from the surrounding tokens.
+**Lexing and parsing** (`lexer.rs`, `parser.rs`, `ast.rs`). A hand-written tokenizer and recursive-descent parser produce the AST. Newline handling (SPEC 2.5) happens in the lexer: it decides whether a newline ends a statement from the surrounding tokens. `driver.rs` cuts large files at lines holding only `}` and lexes and parses the pieces on separate threads, falling back to one piece when a cut does not lie between two items. `main.rs` keeps the output of each component build in the user cache directory, keyed by every input, and reuses it when nothing changed.
 
 **Derive** (`derive.rs`). `@derive(...)` is expanded into ordinary `impl` blocks, generated as Puddi source and parsed like the rest.
 
@@ -42,7 +42,7 @@ The prelude, standard modules and platform layer are embedded in the binary with
 
 **Optimization** (`opt.rs`). Rewrites each function's IR before code generation: it inlines calls that receive a closure or a function value (so iterator chains and higher-order helpers become plain loops without `call_ref`), tiny functions, calls that match on a constructor argument (so `x.get(k).unwrap_or(0)` builds no `Option`), and the recursive calls of small recursive functions once; it then forwards immutable struct fields, selects `match` arms on known constructors and drops dead `let`s. `PUD_NO_OPT=1` skips it.
 
-**Code generation** (`codegen.rs`). Turns IR into WebAssembly text using WasmGC types: structs and enum variants become GC structs (enum variants are subtypes of a base struct), closures and trait objects are GC structs with function references, and integer overflow checks are inlined. `ranges.rs` tracks the value ranges of integer locals implied by `if` and `while` conditions, and codegen leaves out the overflow checks those ranges rule out. The text is assembled into a binary core module with the `wat` crate.
+**Code generation** (`codegen.rs`). Turns IR into WebAssembly text using WasmGC types: structs and enum variants become GC structs (enum variants are subtypes of a base struct), closures and trait objects are GC structs with function references, and integer overflow checks are inlined. `ranges.rs` tracks the value ranges of integer locals implied by `if` and `while` conditions, and codegen leaves out the overflow checks those ranges rule out. `asm.rs` assembles the text into a binary core module, encoding function bodies on several threads; it understands the subset of the text format codegen writes and falls back to the `wat` crate for anything else (`PUD_ASM_CHECK=1` checks that both give the same module).
 
 **Components** (`wit.rs`). Loads WIT worlds with `wit-parser`, generates the bindings for imported interfaces (including canonical ABI lifting and lowering, written as Puddi), generates export wrappers that check the user's `export fn` items against the world, and encodes the final component with `wit-component`. The bundled WASI 0.3 and `puddi:runtime` WIT files are in `wit/`.
 
@@ -50,7 +50,7 @@ The prelude, standard modules and platform layer are embedded in the binary with
 
 | Target | Host side |
 |---|---|
-| `wasi` | `runner.rs` runs the component in the embedded Wasmtime with WASI 0.3 (copying collector, Cranelift inlining, compiled code cached in the user cache directory), and implements the `puddi:runtime` worker interfaces by instantiating the component again on another OS thread |
+| `wasi` | `runner.rs` runs the component in the embedded Wasmtime with WASI 0.3 (copying collector; compiled components and Cranelift's per-function output cached in the user cache directory), and implements the `puddi:runtime` worker interfaces by instantiating the component again on another OS thread |
 | `browser` | `runtime.mjs` (embedded and written out as `puddi.mjs`) extracts the core module from the component and instantiates it with JavaScript host functions; it also runs `pud test` and `PUD_HOST=node` under Node.js |
 | `plugin` | the application that loads the component; `pud run --target plugin` uses `runner.rs` to call one export |
 

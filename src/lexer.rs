@@ -258,6 +258,15 @@ pub fn lex(text: &str, file: u32) -> Result<Vec<Token>, Diag> {
     Ok(lx.out)
 }
 
+/// Lexes `text[lo..hi]` as if it were part of lexing the whole text from a top-level item
+/// boundary at `lo`; spans are offsets into `text`. Returns the tokens without a final
+/// newline or end-of-file token, and whether lexing ended outside every delimiter.
+pub fn lex_range(text: &str, file: u32, lo: usize, hi: usize) -> Result<(Vec<Token>, bool), Diag> {
+    let mut lx = Lexer { src: text[..hi].as_bytes(), text: &text[..hi], pos: lo, file, out: Vec::new(), stack: Vec::new(), interp: false };
+    lx.run()?;
+    Ok((lx.out, lx.stack.is_empty()))
+}
+
 impl<'a> Lexer<'a> {
     fn span(&self, lo: usize) -> Span {
         Span::new(self.file, lo as u32, self.pos as u32)

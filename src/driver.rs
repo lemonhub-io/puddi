@@ -192,9 +192,85 @@ pub fn phase(name: &str) {
 
 fn parse_file(sm: &mut SourceMap, display: String, text: String) -> Result<ast::Module, Vec<Diag>> {
     let fid = sm.add(display, text);
-    let text = sm.files[fid as usize].text.clone();
-    let toks = lexer::lex(&text, fid).map_err(|d| vec![d])?;
-    parser::parse_module(toks).map_err(|d| vec![d])
+    lex_parse(&sm.files[fid as usize].text, fid).map_err(|d| vec![d])
+}
+
+/// Lexes and parses one file. A large file is cut at lines holding only `}` into pieces that
+/// are lexed and parsed on separate threads; the result is the same as parsing it whole,
+/// which is what happens when a cut turns out not to lie between two top-level items.
+fn lex_parse(text: &str, fid: u32) -> Result<ast::Module, Diag> {
+    const PIECE: usize = 48 * 1024;
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8);
+    let pieces = (text.len() / PIECE).min(threads);
+    if pieces < 2 {
+        return lexer::lex(text, fid).and_then(parser::parse_module);
+    }
+    let b = text.as_bytes();
+    let mut cuts = vec![0];
+    for k in 1..pieces {
+        let from = (text.len() * k / pieces).max(*cuts.last().unwrap());
+        // just after "\n}\n" (or "\n}\r\n")
+        let mut i = from;
+        let found = loop {
+            match b[i..].iter().position(|&c| c == b'\n') {
+                None => break None,
+                Some(j) => i += j + 1,
+            }
+            if b.get(i) == Some(&b'}') {
+                match (b.get(i + 1), b.get(i + 2)) {
+                    (Some(b'\n'), _) => break Some(i + 2),
+                    (Some(b'\r'), Some(b'\n')) => break Some(i + 3),
+                    _ => {}
+                }
+            }
+        };
+        match found {
+            Some(c) if c < text.len() => cuts.push(c),
+            _ => break,
+        }
+    }
+    cuts.push(text.len());
+    let results: Vec<Result<(Vec<lexer::Token>, bool), Diag>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = cuts.windows(2).map(|w| sc.spawn(move || lexer::lex_range(text, fid, w[0], w[1]))).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    use lexer::Tok;
+    let item_start = |t: &Tok| matches!(t, Tok::Fn | Tok::Struct | Tok::Enum | Tok::Impl | Tok::Trait | Tok::Pub | Tok::Const | Tok::Type | Tok::Test | Tok::Import | Tok::At | Tok::Export | Tok::Async);
+    let mut chunks: Vec<Vec<lexer::Token>> = Vec::new();
+    for (k, r) in results.into_iter().enumerate() {
+        let Ok((toks, closed)) = r else { return lexer::lex(text, fid).and_then(parser::parse_module) };
+        let last = k + 2 == cuts.len();
+        // a cut is clean when the piece before it ends outside all delimiters with the `}`
+        // of an item, and the piece after it starts a new item
+        if !last && (!closed || !matches!(toks.iter().rev().find(|t| t.tok != Tok::Newline).map(|t| &t.tok), Some(Tok::RBrace))) {
+            return lexer::lex(text, fid).and_then(parser::parse_module);
+        }
+        if k > 0 && !toks.first().is_none_or(|t| item_start(&t.tok)) {
+            return lexer::lex(text, fid).and_then(parser::parse_module);
+        }
+        chunks.push(toks);
+    }
+    let end = text.len() as u32;
+    let n = chunks.len();
+    for (k, c) in chunks.iter_mut().enumerate() {
+        let at = c.last().map_or(end, |t| t.span.hi);
+        if k + 1 == n && !matches!(c.last().map(|t| &t.tok), None | Some(Tok::Newline) | Some(Tok::LBrace)) {
+            c.push(lexer::Token { tok: Tok::Newline, span: crate::diag::Span::new(fid, end, end) });
+        }
+        let at = if k + 1 == n { end } else { at };
+        c.push(lexer::Token { tok: Tok::Eof, span: crate::diag::Span::new(fid, at, at) });
+    }
+    let parsed: Vec<Result<ast::Module, Diag>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = chunks.into_iter().map(|c| sc.spawn(move || parser::parse_module(c))).collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut m = ast::Module { imports: Vec::new(), items: Vec::new() };
+    for r in parsed {
+        let p = r?;
+        m.imports.extend(p.imports);
+        m.items.extend(p.items);
+    }
+    Ok(m)
 }
 
 /// Lexes and parses the given files on a few threads, largest first.
@@ -213,7 +289,7 @@ fn parse_parallel(sm: &SourceMap, fids: &[u32]) -> Vec<Result<ast::Module, Diag>
                         let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(&i) = order.get(k) else { break };
                         let fid = fids[i];
-                        mine.push((i, lexer::lex(&sm.files[fid as usize].text, fid).and_then(parser::parse_module)));
+                        mine.push((i, lex_parse(&sm.files[fid as usize].text, fid)));
                     }
                     mine
                 })

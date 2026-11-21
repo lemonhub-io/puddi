@@ -17,10 +17,10 @@ const WORK = resolve('compile-work');
 
 // ---------------------------------------------------------------- sources
 
-// v (0 or 1) changes one line, so that consecutive builds see an edit
+// v changes one line; every edit uses a new v, so no build cache has seen the result
 function gen(lang, prog, v) {
   if (prog === 'hello') {
-    const s = v ? 'hi!' : 'hi';
+    const s = `hi ${v}`;
     return { rust: `fn main() {\n    println!("${s}");\n}\n`, moon: `fn main {\n  println("${s}")\n}\n`, pud: `fn main() {\n    print("${s}")\n}\n` }[lang];
   }
   const n = +prog.slice(3);
@@ -134,6 +134,8 @@ const LANGS = {
     check: [PUD, 'check', 'main.pud'],
     build: [PUD, 'build', 'main.pud', '-o', 'out'],
     run: [PUD, 'run', 'main.pud'],
+    // a cache of its own, so that builds of earlier runs of this script are not reused
+    env: { LOCALAPPDATA: join(WORK, 'pud-cache'), XDG_CACHE_HOME: join(WORK, 'pud-cache') },
   },
 };
 
@@ -148,6 +150,7 @@ function exec(cmd, cwd, env = {}) {
 const R = { reps: REPS, lines: {}, times: {}, pudPhases: {}, errors: [] };
 const add = (prog, step, lang, ms) => ((R.times[`${prog}|${step}`] ??= {})[lang] ??= []).push(+ms.toFixed(1));
 
+rmSync(WORK, { recursive: true, force: true });
 for (const prog of PROGS) {
   for (const [lang, L] of Object.entries(LANGS)) {
     const d = join(WORK, lang, prog);
@@ -155,31 +158,31 @@ for (const prog of PROGS) {
     mkdirSync(join(d, L.src, '..'), { recursive: true });
     L.setup(d);
     let v = 0;
-    const write = () => { v ^= 1; writeFileSync(join(d, L.src), gen(lang, prog, v)); };
+    const write = () => { v += 1; writeFileSync(join(d, L.src), gen(lang, prog, v)); };
     write();
     R.lines[prog] ??= {};
     R.lines[prog][lang] = gen(lang, prog, 0).split('\n').length;
     try {
-      exec(L.build, d); // warm-up: tool start-up, file caches
+      exec(L.build, d, L.env); // warm-up: tool start-up, file caches
       for (let rep = 0; rep < REPS; rep++) {
         L.clean(d);
-        add(prog, 'check (cold)', lang, exec(L.check, d).ms);
+        add(prog, 'check (cold)', lang, exec(L.check, d, L.env).ms);
         write();
-        add(prog, 'edit, check', lang, exec(L.check, d).ms);
+        add(prog, 'edit, check', lang, exec(L.check, d, L.env).ms);
         L.clean(d);
-        add(prog, 'build (cold)', lang, exec(L.build, d).ms);
+        add(prog, 'build (cold)', lang, exec(L.build, d, L.env).ms);
         write();
-        add(prog, 'edit, run', lang, exec(L.run, d).ms);
-        add(prog, 'run again', lang, exec(L.run, d).ms);
+        add(prog, 'edit, run', lang, exec(L.run, d, L.env).ms);
+        add(prog, 'run again', lang, exec(L.run, d, L.env).ms);
         for (const step of ['release', 'release native']) {
           if (!L[step]) continue;
           L.clean(d);
-          add(prog, `${step} (cold)`, lang, exec(L[step], d).ms);
+          add(prog, `${step} (cold)`, lang, exec(L[step], d, L.env).ms);
         }
       }
       if (lang === 'pud') {
         L.clean(d);
-        R.pudPhases[prog] = exec(L.build, d, { PUD_TIME: '1' }).out.split('\n').filter((l) => l.startsWith('[time]'));
+        R.pudPhases[prog] = exec(L.build, d, { ...L.env, PUD_TIME: '1', PUD_NO_CACHE: '1' }).out.split('\n').filter((l) => l.startsWith('[time]'));
       }
     } catch (e) {
       R.errors.push(String(e.message || e));

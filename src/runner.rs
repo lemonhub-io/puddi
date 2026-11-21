@@ -146,12 +146,144 @@ fn new_engine() -> wasmtime::Result<Engine> {
     // numbers runs 1.7x faster) for a few MiB more memory; PUD_WASMTIME_HEAP_MB overrides it
     let heap_mb = std::env::var("PUD_WASMTIME_HEAP_MB").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(16);
     config.gc_heap_initial_size(heap_mb << 20);
-    // small runtime helpers (List indexing, overflow checks, iterator adapters) are
-    // separate wasm functions; Cranelift only removes their call overhead when inlining
-    if std::env::var("PUD_WASMTIME_INLINE").as_deref() != Ok("0") {
+    // Cranelift's inliner is off: `opt.rs` already inlines the small functions that matter,
+    // and inlining in Cranelift makes compiling after every edit about 1.7x slower for the
+    // same speed (PUD_WASMTIME_INLINE=1 turns it on)
+    if std::env::var("PUD_WASMTIME_INLINE").as_deref() == Ok("1") {
         config.compiler_inlining(wasmtime::Inlining::Yes);
     }
+    // functions that are unchanged since an earlier run are not compiled again
+    if let Some(c) = fn_cache() {
+        config.enable_incremental_compilation(c)?;
+    }
     Engine::new(&config)
+}
+
+/// Cranelift's per-function compilation cache, kept in one file of appended entries:
+/// `[key length u32][value length u32][check u64][key][value]`. The file is read the first
+/// time Cranelift asks for an entry (a run whose machine code is cached never does), and the
+/// new entries are appended after the compilation; when the file grows past
+/// `FN_CACHE_LIMIT`, it is rewritten with only the entries this run used.
+#[derive(Debug)]
+struct FnCache {
+    path: std::path::PathBuf,
+    loaded: std::sync::OnceLock<FnFile>,
+    used: std::sync::Mutex<std::collections::HashSet<Vec<u8>>>,
+    fresh: std::sync::Mutex<HashMap<Vec<u8>, Vec<u8>>>,
+}
+
+#[derive(Debug, Default)]
+struct FnFile {
+    data: Vec<u8>,
+    /// key -> range of the value in `data`
+    index: HashMap<Box<[u8]>, (usize, usize)>,
+}
+
+const FN_CACHE_LIMIT: u64 = 64 << 20;
+
+static FN_CACHE: std::sync::OnceLock<Option<Arc<FnCache>>> = std::sync::OnceLock::new();
+
+fn fn_cache() -> Option<Arc<FnCache>> {
+    FN_CACHE
+        .get_or_init(|| {
+            let path = crate::cache_base()?.join("wasmtime-fn.bin");
+            Some(Arc::new(FnCache { path, loaded: Default::default(), used: Default::default(), fresh: Default::default() }))
+        })
+        .clone()
+}
+
+impl FnCache {
+    fn file(&self) -> &FnFile {
+        self.loaded.get_or_init(|| {
+            let data = std::fs::read(&self.path).unwrap_or_default();
+            let mut index = HashMap::new();
+            let mut i = 0;
+            while i + 16 <= data.len() {
+                let k = u32::from_le_bytes(data[i..i + 4].try_into().unwrap()) as usize;
+                let v = u32::from_le_bytes(data[i + 4..i + 8].try_into().unwrap()) as usize;
+                let check = u64::from_le_bytes(data[i + 8..i + 16].try_into().unwrap());
+                let Some(end) = (i + 16).checked_add(k).and_then(|x| x.checked_add(v)).filter(|&e| e <= data.len()) else { break };
+                let (key, val) = data[i + 16..end].split_at(k);
+                if fn_check(key, val) != check {
+                    break;
+                }
+                index.insert(key.into(), (i + 16 + k, end));
+                i = end;
+            }
+            FnFile { data, index }
+        })
+    }
+}
+
+fn fn_check(key: &[u8], val: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (key, val).hash(&mut h);
+    h.finish()
+}
+
+fn fn_entry(out: &mut Vec<u8>, key: &[u8], val: &[u8]) {
+    out.extend_from_slice(&(key.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(val.len() as u32).to_le_bytes());
+    out.extend_from_slice(&fn_check(key, val).to_le_bytes());
+    out.extend_from_slice(key);
+    out.extend_from_slice(val);
+}
+
+impl wasmtime::CacheStore for FnCache {
+    fn get(&self, key: &[u8]) -> Option<std::borrow::Cow<'_, [u8]>> {
+        let f = self.file();
+        if let Some(&(a, b)) = f.index.get(key) {
+            if let Ok(mut u) = self.used.lock() {
+                u.insert(key.to_vec());
+            }
+            return Some(std::borrow::Cow::Borrowed(&f.data[a..b]));
+        }
+        self.fresh.lock().ok()?.get(key).cloned().map(std::borrow::Cow::Owned)
+    }
+
+    fn insert(&self, key: &[u8], value: Vec<u8>) -> bool {
+        self.file();
+        if let Ok(mut f) = self.fresh.lock() {
+            f.insert(key.to_vec(), value);
+        }
+        true
+    }
+}
+
+/// Writes the entries compiled since the cache was read.
+fn flush_fn_cache() {
+    let Some(c) = FN_CACHE.get().cloned().flatten() else { return };
+    let fresh = std::mem::take(&mut *c.fresh.lock().unwrap_or_else(|e| e.into_inner()));
+    if fresh.is_empty() {
+        return;
+    }
+    let mut out = Vec::new();
+    for (k, v) in &fresh {
+        fn_entry(&mut out, k, v);
+    }
+    let file = c.file();
+    if (file.data.len() + out.len()) as u64 > FN_CACHE_LIMIT {
+        let used = c.used.lock().map(|u| u.clone()).unwrap_or_default();
+        for k in &used {
+            if let Some(&(a, b)) = file.index.get(k.as_slice()) {
+                fn_entry(&mut out, k, &file.data[a..b]);
+            }
+        }
+        let tmp = c.path.with_extension(format!("{}.tmp", std::process::id()));
+        if std::fs::write(&tmp, &out).is_ok() && std::fs::rename(&tmp, &c.path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        return;
+    }
+    use std::io::Write;
+    if let Some(dir) = c.path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // one write, so that entries of runs appending at the same time do not interleave
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&c.path) {
+        let _ = f.write_all(&out);
+    }
 }
 
 /// Compiles `bytes`, or loads the machine code compiled by an earlier run of the same
@@ -174,27 +306,14 @@ fn load_component(engine: &Engine, bytes: &[u8]) -> wasmtime::Result<Component> 
         }
     }
     let code = engine.precompile_component(bytes)?;
-    let _ = std::fs::create_dir_all(&dir);
-    let tmp = dir.join(format!("{key}.{}.tmp", std::process::id()));
-    if std::fs::write(&tmp, &code).is_ok() && std::fs::rename(&tmp, &path).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
+    flush_fn_cache();
+    crate::cache_store(&dir, &format!("{key}.cwasm"), &code, 32);
     // SAFETY: `code` was just produced by this engine
     unsafe { Component::deserialize(engine, &code) }
 }
 
 fn cache_dir() -> Option<std::path::PathBuf> {
-    if std::env::var_os("PUD_NO_CACHE").is_some() {
-        return None;
-    }
-    let base = if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from)
-    } else if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Caches"))
-    } else {
-        std::env::var_os("XDG_CACHE_HOME").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))
-    };
-    base.map(|b| b.join("pud").join("wasmtime"))
+    crate::cache_base().map(|b| b.join("wasmtime"))
 }
 
 fn add_workers(linker: &mut Linker<State>) -> wasmtime::Result<()> {

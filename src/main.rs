@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 
+mod asm;
 mod ast;
 mod codegen;
 mod deps;
@@ -198,6 +199,93 @@ struct BuildResult {
     component: Option<(PathBuf, Vec<u8>)>,
 }
 
+/// The user's cache directory for `pud` (`PUD_NO_CACHE=1` turns caching off).
+fn cache_base() -> Option<PathBuf> {
+    if std::env::var_os("PUD_NO_CACHE").is_some() {
+        return None;
+    }
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+    };
+    base.map(|b| b.join("pud"))
+}
+
+/// Writes `data` to `dir/name` through a temporary file, and keeps the directory to the
+/// `keep` most recently written entries.
+fn cache_store(dir: &Path, name: &str, data: &[u8], keep: usize) {
+    let _ = std::fs::create_dir_all(dir);
+    let path = dir.join(name);
+    let tmp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    if std::fs::write(&tmp, data).is_ok() && std::fs::rename(&tmp, &path).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<(std::time::SystemTime, PathBuf)> = rd.flatten().filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path()))).collect();
+    if entries.len() > keep {
+        entries.sort();
+        for (_, p) in &entries[..entries.len() - keep] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// The cache key of a component build: this `pud` executable, the target, the world, the
+/// package's WIT files and every source file.
+fn build_key(proj: &Project, target: &str, comp: &driver::ComponentOpts) -> Option<String> {
+    use std::hash::{Hash, Hasher};
+    cache_base()?;
+    let exe = std::env::current_exe().ok()?;
+    let meta = std::fs::metadata(&exe).ok()?;
+    let mut wit_files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    if let Some(d) = &comp.pkg_dir {
+        let mut todo = vec![d.join("wit")];
+        while let Some(dir) = todo.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    todo.push(p);
+                } else {
+                    wit_files.push((p.clone(), std::fs::read(&p).ok()?));
+                }
+            }
+        }
+        wit_files.sort();
+    }
+    let mut key = String::new();
+    for salt in [0u8, 1] {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (salt, env!("CARGO_PKG_VERSION"), &exe, meta.len(), meta.modified().ok()).hash(&mut h);
+        (target, &comp.world, &comp.pkg_dir, &wit_files, std::env::var("PUD_NO_OPT").ok(), &proj.root).hash(&mut h);
+        for f in &proj.files {
+            let mut aliases: Vec<_> = f.aliases.iter().collect();
+            aliases.sort();
+            (&f.module, format!("{:?}", f.pkg), &f.prefix, aliases, &f.display, &f.text).hash(&mut h);
+        }
+        key.push_str(&format!("{:016x}", h.finish()));
+    }
+    Some(key)
+}
+
+fn cache_get(key: &str) -> Option<driver::Compiled> {
+    let data = std::fs::read(cache_base()?.join("build").join(key)).ok()?;
+    let n = u64::from_le_bytes(data.get(..8)?.try_into().ok()?) as usize;
+    let (wasm, component) = data.get(8..)?.split_at_checked(n)?;
+    Some(driver::Compiled { wasm: wasm.to_vec(), component: Some(component.to_vec()), wat: String::new(), tests: Vec::new(), warnings: Vec::new(), has_main: true })
+}
+
+fn cache_put(key: &str, c: &driver::Compiled) {
+    let (Some(dir), Some(comp)) = (cache_base(), &c.component) else { return };
+    let mut data = (c.wasm.len() as u64).to_le_bytes().to_vec();
+    data.extend_from_slice(&c.wasm);
+    data.extend_from_slice(comp);
+    cache_store(&dir.join("build"), key, &data, 64);
+}
+
 /// `ephemeral`: the component is only run in this process, so nothing is written to disk.
 fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat: bool, ephemeral: bool) -> Result<BuildResult, ExitCode> {
     let mut sm = SourceMap::default();
@@ -215,16 +303,33 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
             }
         }
     };
-    let compiled = match driver::compile(&mut sm, proj.files, &proj.root, target, mode, comp) {
-        Ok(c) => c,
-        Err(errs) => {
-            report(&sm, &errs);
-            let n = errs.iter().filter(|d| !d.warning).count();
-            eprintln!("error: could not compile `{name}` due to {n} previous error{}", if n == 1 { "" } else { "s" });
-            return Err(ExitCode::from(1));
+    // a build of exactly the same inputs is reused, as long as it had no warnings to repeat
+    let key = match &comp {
+        Some(c) if mode == Mode::Build && !emit_wat => build_key(&proj, target, c),
+        _ => None,
+    };
+    let cached = key.as_deref().and_then(cache_get);
+    let compiled = match cached {
+        Some(c) => c,
+        None => {
+            let compiled = match driver::compile(&mut sm, proj.files, &proj.root, target, mode, comp) {
+                Ok(c) => c,
+                Err(errs) => {
+                    report(&sm, &errs);
+                    let n = errs.iter().filter(|d| !d.warning).count();
+                    eprintln!("error: could not compile `{name}` due to {n} previous error{}", if n == 1 { "" } else { "s" });
+                    return Err(ExitCode::from(1));
+                }
+            };
+            report(&sm, &compiled.warnings);
+            if let Some(k) = &key {
+                if compiled.warnings.is_empty() {
+                    cache_put(k, &compiled);
+                }
+            }
+            compiled
         }
     };
-    report(&sm, &compiled.warnings);
     if mode == Mode::Check {
         return Ok(BuildResult { out_dir: PathBuf::new(), wasm_path: PathBuf::new(), component: None });
     }

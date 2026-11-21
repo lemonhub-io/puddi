@@ -8,7 +8,7 @@ All notable changes to Puddi are recorded here. The format follows [Keep a Chang
 
 Measured with the programs in `bench/` against Rust and MoonBit; see `bench/README.md`.
 
-- `pud run` uses Wasmtime's copying garbage collector instead of deferred reference counting, enables Cranelift's inliner and starts with a 16 MiB GC heap: up to 20x faster on allocation-heavy code
+- `pud run` uses Wasmtime's copying garbage collector instead of deferred reference counting and starts with a 16 MiB GC heap: up to 20x faster on allocation-heavy code
 - Compiled machine code is cached per component in the user cache directory, so running an unchanged program again skips Cranelift (`PUD_NO_CACHE=1` turns this off)
 - Payload-less enum variants (`None`, `Ordering.Less`, ...) are shared instead of allocated on every use
 - Integer overflow checks for `Int` addition and subtraction are emitted inline, and left out where the operands' ranges show they cannot overflow (for example `i += 1` inside `while i < n`)
@@ -18,7 +18,12 @@ Measured with the programs in `bench/` against Rust and MoonBit; see `bench/READ
 - A new IR optimizer inlines closures passed to higher-order functions, tiny functions, matches on constructors returned by small functions and one level of small recursive functions: iterator chains run 45x faster on Wasmtime, and `Option` results of `Map.get` or `to_int` are no longer allocated when unwrapped at once (`PUD_NO_OPT=1` turns it off)
 - `Map.insert` finds the key or a free slot in one probe
 - `PUD_HOST=node pud run` starts Node.js with `--no-liftoff`: V8 cannot move a running wasm loop to optimized code, so loops in `main` stayed in the baseline tier
-- `pud run` compiles faster (parallel parsing, shared declarations, only the platform operations a program uses) and starts Wasmtime on another thread while compiling: `hello` runs in 75 ms instead of 160 ms; `PUD_TIME=1` prints the time of each phase
+- `pud run` compiles faster (parallel parsing, shared declarations, only the platform operations a program uses) and starts Wasmtime on another thread while compiling; `PUD_TIME=1` prints the time of each phase
+- `pud build` and `pud run` reuse the previous build when the sources, WIT files, target and compiler are unchanged: running an unchanged `hello` takes 25 ms instead of 160 ms
+- Wasmtime keeps compiled machine code per function, so after an edit only the changed functions are compiled again; Cranelift's own inliner is off, which makes compiling 1.7x faster at the same speed
+- Large source files are lexed and parsed in pieces on several threads
+- The generated WebAssembly text is assembled by `src/asm.rs` on several threads instead of the `wat` crate, 10x faster with byte-identical code (`PUD_WAT=1` uses `wat`, `PUD_ASM_CHECK=1` compares both); a 2,000-function program builds in 290 ms instead of 570 ms
+- `bench/compile.mjs` compares the edit-compile-run loop with `cargo` and `moon`
 
 ### Documentation
 

@@ -92,6 +92,29 @@ fn wat_str(bytes: &[u8]) -> String {
     s
 }
 
+/// Assembles the generated text with `asm`, or with the `wat` crate when `asm` does not
+/// understand it (`PUD_WAT=1` always uses `wat`; `PUD_ASM_CHECK=1` assembles with both and
+/// fails unless the results agree).
+fn assemble(text: &str) -> Result<Vec<u8>, String> {
+    let wat = || wat::parse_str(text).map_err(|e| format!("internal error: generated WAT failed to assemble: {e}"));
+    if std::env::var_os("PUD_WAT").is_some() {
+        return wat();
+    }
+    let check = std::env::var_os("PUD_ASM_CHECK").is_some();
+    match crate::asm::assemble(text) {
+        Ok(w) => {
+            if check {
+                if let Some(d) = crate::asm::compare(&w, &wat()?) {
+                    return Err(format!("internal error: assembler output differs from wat: {d}"));
+                }
+            }
+            Ok(w)
+        }
+        Err(e) if check => Err(format!("internal error: assembler: {e}")),
+        Err(_) => wat(),
+    }
+}
+
 fn f64_lit(v: f64) -> String {
     if v.is_nan() {
         "nan".into()
@@ -1944,7 +1967,8 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
     }
     out.push_str(")\n");
     crate::driver::phase("codegen wat");
-    let wasm = wat::parse_str(&out).map_err(|e| format!("internal error: generated WAT failed to assemble: {e}"))?;
+    let wasm = assemble(&out)?;
+    crate::driver::phase("codegen asm");
     let mut features = wasmparser::WasmFeatures::default();
     features.insert(wasmparser::WasmFeatures::GC);
     features.insert(wasmparser::WasmFeatures::FUNCTION_REFERENCES);
