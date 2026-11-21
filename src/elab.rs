@@ -33,6 +33,8 @@ pub struct Global<'p> {
     pub tests: Vec<(String, usize)>,
     /// Functions run by `__worker_entry(k)` in a worker instance.
     pub worker_entries: Vec<usize>,
+    /// Replacement bodies for functions (the pruned platform dispatchers).
+    pub body_override: HashMap<FnId, ast::Block>,
 }
 
 impl<'p> Global<'p> {
@@ -50,6 +52,7 @@ impl<'p> Global<'p> {
             entry: None,
             tests: Vec::new(),
             worker_entries: Vec::new(),
+            body_override: HashMap::new(),
         }
     }
 
@@ -80,6 +83,15 @@ impl<'p> Global<'p> {
     pub fn run(&mut self) {
         while let Some(inst) = self.queue.pop_front() {
             let idx = self.insts[&inst];
+            let f = elaborate_fn(self, &inst);
+            self.funcs[idx] = Some(f);
+        }
+    }
+
+    /// Elaborates an already elaborated function again (after its body was overridden).
+    pub fn reelaborate(&mut self, inst: FnInst) {
+        let idx = self.request(inst.clone());
+        if self.funcs[idx].is_some() {
             let f = elaborate_fn(self, &inst);
             self.funcs[idx] = Some(f);
         }
@@ -158,8 +170,8 @@ fn elaborate_fn(g: &mut Global, inst: &FnInst) -> ir::Func {
     if f.test_name.is_some() {
         el.cxs[0].is_async = true;
     }
-    let body = if let Some(b) = &f.decl.body {
-        let b = b.clone();
+    let overridden = el.g.body_override.get(&inst.fn_id).cloned();
+    let body = if let Some(b) = overridden.as_ref().or(f.decl.body.as_ref()) {
         if f.decl.is_async {
             let inner = match &ret {
                 Ty::Adt(_, a) if a.len() == 1 => a[0].clone(),
@@ -168,7 +180,7 @@ fn elaborate_fn(g: &mut Global, inst: &FnInst) -> ir::Func {
             let bexpr = ae(ast::ExprKind::Block(b.clone()), b.span);
             el.future_of(&bexpr, Some(inner), b.span)
         } else {
-            let e = el.block(&b, Some(&ret));
+            let e = el.block(b, Some(&ret));
             el.coerce(e, &ret)
         }
     } else {
@@ -1481,6 +1493,19 @@ impl<'g, 'p> Elab<'g, 'p> {
             es.push(e);
         }
         if let Some(name) = &f.intrinsic {
+            // questions about a type argument, answered here so that `if __is_int<T>()`
+            // elaborates only the branch for the actual type
+            if matches!(name.as_str(), "is_int" | "int_bits" | "int_signed") {
+                let it = match targs.first().map(|t| self.resolve(t)) {
+                    Some(Ty::Int(it)) => Some(it),
+                    _ => None,
+                };
+                return match name.as_str() {
+                    "is_int" => mk(ExprKind::Lit(Lit::Bool(it.is_some())), Ty::Bool, span),
+                    "int_bits" => mk(ExprKind::Lit(Lit::Int(it.map_or(0, |i| i.bits() as i128))), INT, span),
+                    _ => mk(ExprKind::Lit(Lit::Bool(it.is_some_and(|i| i.signed()))), Ty::Bool, span),
+                };
+            }
             return mk(ExprKind::Intrinsic(name.clone(), targs, es), ret, span);
         }
         mk(ExprKind::Call(FnInst { fn_id: fid, targs }, es), ret, span)
@@ -2019,7 +2044,29 @@ impl<'g, 'p> Elab<'g, 'p> {
             return self.match_inner(scrut, &arms, span, if unit_ctx { Some(&Ty::Unit) } else { expect });
         }
         let ast::Cond::Expr(c) = cond else { unreachable!() };
+        let static_test = matches!(&c.kind, ast::ExprKind::Call(f, _) if matches!(&f.kind, ast::ExprKind::Name(id, _) if id.name == "__is_int"));
         let c = self.expr_coerce(c, &Ty::Bool);
+        if let (true, ExprKind::Lit(Lit::Bool(b))) = (static_test, &c.kind) {
+            // only the branch for this instantiation's type is elaborated
+            return match (*b, els) {
+                (true, None) => {
+                    let t = self.block(then, Some(&Ty::Unit));
+                    self.coerce(t, &Ty::Unit)
+                }
+                (false, None) => unit(span),
+                (true, Some(_)) => {
+                    let t = self.block(then, expect);
+                    match expect {
+                        Some(x) => self.coerce(t, x),
+                        None => t,
+                    }
+                }
+                (false, Some(e)) => match expect {
+                    Some(x) => self.expr_coerce(e, x),
+                    None => self.expr(e, None),
+                },
+            };
+        }
         match els {
             None => {
                 let t = self.block(then, Some(&Ty::Unit));

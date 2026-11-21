@@ -1,5 +1,7 @@
 //! Abstract syntax tree.
 
+use std::sync::Arc;
+
 use crate::diag::Span;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -71,7 +73,7 @@ pub struct Item {
 
 #[derive(Clone, Debug)]
 pub enum ItemKind {
-    Fn(FnDecl),
+    Fn(Arc<FnDecl>),
     Struct(StructDecl),
     Enum(EnumDecl),
     Trait(TraitDecl),
@@ -151,7 +153,7 @@ pub struct TraitDecl {
     pub generics: Vec<GenericParam>,
     pub supertraits: Vec<TypeExpr>,
     pub assoc_types: Vec<Ident>,
-    pub methods: Vec<FnDecl>,
+    pub methods: Vec<Arc<FnDecl>>,
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +161,7 @@ pub struct ImplDecl {
     pub generics: Vec<GenericParam>,
     pub trait_ref: Option<TypeExpr>,
     pub self_ty: TypeExpr,
-    pub methods: Vec<FnDecl>,
+    pub methods: Vec<Arc<FnDecl>>,
     pub assoc_types: Vec<(Ident, TypeExpr)>,
 }
 

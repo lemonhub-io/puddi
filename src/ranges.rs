@@ -70,6 +70,10 @@ impl Ranges {
         match &e.kind {
             ExprKind::Lit(Lit::Int(v)) => (*v, *v),
             ExprKind::Local(id) => self.known.get(id).map(|r| (r.0.max(full.0), r.1.min(full.1))).unwrap_or(full),
+            ExprKind::Intrinsic(name, _, args) if name == "select" && args.len() == 3 => {
+                let (a, b) = (self.of(&args[1], it), self.of(&args[2], it));
+                (a.0.min(b.0), a.1.max(b.1))
+            }
             _ => full,
         }
     }

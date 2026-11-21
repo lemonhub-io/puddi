@@ -181,11 +181,50 @@ pub struct Compiled {
     pub has_main: bool,
 }
 
+/// Prints the time since the first call when `PUD_TIME` is set (phase profiling).
+pub fn phase(name: &str) {
+    use std::sync::OnceLock;
+    static T0: OnceLock<Option<std::time::Instant>> = OnceLock::new();
+    if let Some(t0) = T0.get_or_init(|| std::env::var_os("PUD_TIME").map(|_| std::time::Instant::now())) {
+        eprintln!("[time] {name} {:.1} ms", t0.elapsed().as_secs_f64() * 1e3);
+    }
+}
+
 fn parse_file(sm: &mut SourceMap, display: String, text: String) -> Result<ast::Module, Vec<Diag>> {
     let fid = sm.add(display, text);
     let text = sm.files[fid as usize].text.clone();
     let toks = lexer::lex(&text, fid).map_err(|d| vec![d])?;
     parser::parse_module(toks).map_err(|d| vec![d])
+}
+
+/// Lexes and parses the given files on a few threads, largest first.
+fn parse_parallel(sm: &SourceMap, fids: &[u32]) -> Vec<Result<ast::Module, Diag>> {
+    let mut order: Vec<usize> = (0..fids.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(sm.files[fids[i] as usize].text.len()));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 8).min(fids.len().max(1));
+    let mut out: Vec<Option<Result<ast::Module, Diag>>> = (0..fids.len()).map(|_| None).collect();
+    let done: Vec<Vec<(usize, Result<ast::Module, Diag>)>> = std::thread::scope(|sc| {
+        let hs: Vec<_> = (0..threads)
+            .map(|_| {
+                sc.spawn(|| {
+                    let mut mine = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&i) = order.get(k) else { break };
+                        let fid = fids[i];
+                        mine.push((i, lexer::lex(&sm.files[fid as usize].text, fid).and_then(parser::parse_module)));
+                    }
+                    mine
+                })
+            })
+            .collect();
+        hs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    for (i, r) in done.into_iter().flatten() {
+        out[i] = Some(r);
+    }
+    out.into_iter().map(|r| r.unwrap()).collect()
 }
 
 fn with_derives(sm: &mut SourceMap, module: &mut ast::Module, name: &str) -> Result<(), Vec<Diag>> {
@@ -202,6 +241,7 @@ fn internal(m: String) -> Vec<Diag> {
 }
 
 pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &str, mode: Mode, comp: Option<ComponentOpts>) -> Result<Compiled, Vec<Diag>> {
+    phase("compile start");
     let mut errs: Vec<Diag> = Vec::new();
     let mut sources: Vec<ModSource> = Vec::new();
 
@@ -223,7 +263,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
     let mut platform_imports = String::new();
     let mut platform_text = String::new();
     if let Some(c) = &comp {
-        let (base, _) = crate::wit::Wit::new(c.pkg_dir.as_deref()).map_err(internal_user)?;
+        let (base, base_own) = crate::wit::Wit::new(c.pkg_dir.as_deref()).map_err(internal_user)?;
         let mut extra_names: Vec<String> = Vec::new();
         for (_, m) in &user_mods {
             for imp in &m.imports {
@@ -247,7 +287,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
         }
         extra_names.extend(plat.iter().map(|s| s.to_string()));
         let mut extra_exports: Vec<String> = if uses_workers { vec!["puddi:runtime/worker-main".into()] } else { Vec::new() };
-        let mut w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
+        let mut w = crate::wit::Wit::load_with(base.clone(), base_own, &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
         // a plugin gets the capabilities its world imports (SPEC 10.2 "host")
         let mut caps = Caps { clocks: target == "wasi", random: target == "wasi", http: target == "wasi", log: false, workers: uses_workers };
         if target == "plugin" {
@@ -272,7 +312,7 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
             }
             if caps.workers {
                 extra_exports.push("puddi:runtime/worker-main".into());
-                w = crate::wit::Wit::load(c.pkg_dir.as_deref(), &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
+                w = crate::wit::Wit::load_with(base.clone(), base_own, &c.world, &extra_names, &extra_exports).map_err(internal_user)?;
             }
             let mut host = Vec::new();
             for (on, m) in [(caps.clocks, "std.time"), (caps.random, "std.random"), (caps.http, "std.http"), (caps.workers, "std.worker")] {
@@ -316,37 +356,35 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
         wit_ctx = Some(w);
     }
 
-    // prelude
+    phase("wit bindings");
+    // prelude, std and the WIT bindings, parsed in parallel (the prelude alone is ~50k tokens)
     let prelude_text = format!("{platform_imports}{PRELUDE}\n{platform_text}\n// ---- generated numeric prelude ----\n{}", crate::numeric::generate());
-    match parse_file(sm, "<prelude>".into(), prelude_text) {
-        Ok(m) => sources.push(ModSource { path: "prelude".into(), pkg: Pkg::Prelude, ast: m, prefix: String::new(), aliases: Default::default() }),
-        Err(e) => return Err(e),
-    }
-    // std
+    // (module path, package, is the prelude, file id)
+    let mut jobs: Vec<(String, Pkg, u32)> = vec![("prelude".into(), Pkg::Prelude, sm.add("<prelude>".into(), prelude_text))];
     for (path, text) in STD_MODULES {
-        if program::std_available(path, target) != Some(true) {
-            continue;
-        }
-        match parse_file(sm, format!("<{path}>"), text.to_string()) {
-            Ok(mut m) => {
-                if let Err(e) = with_derives(sm, &mut m, path) {
-                    errs.extend(e);
-                }
-                sources.push(ModSource { path: path.to_string(), pkg: Pkg::Std, ast: m, prefix: "std".into(), aliases: Default::default() });
-            }
-            Err(e) => errs.extend(e),
+        if program::std_available(path, target) == Some(true) {
+            jobs.push((path.to_string(), Pkg::Std, sm.add(format!("<{path}>"), text.to_string())));
         }
     }
-    // generated WIT bindings
     for (path, text) in binding_sources {
-        match parse_file(sm, format!("<WIT bindings {path}>"), text) {
+        let fid = sm.add(format!("<WIT bindings {path}>"), text);
+        jobs.push((path, Pkg::Std, fid));
+    }
+    let parsed = parse_parallel(sm, &jobs.iter().map(|j| j.2).collect::<Vec<_>>());
+    for ((path, pkg, _), res) in jobs.into_iter().zip(parsed) {
+        match res {
             Ok(mut m) => {
+                if pkg == Pkg::Prelude {
+                    sources.push(ModSource { path, pkg, ast: m, prefix: String::new(), aliases: Default::default() });
+                    continue;
+                }
                 if let Err(e) = with_derives(sm, &mut m, &path) {
                     errs.extend(e);
                 }
-                sources.push(ModSource { path, pkg: Pkg::Std, ast: m, prefix: "std".into(), aliases: Default::default() });
+                sources.push(ModSource { path, pkg, ast: m, prefix: "std".into(), aliases: Default::default() });
             }
-            Err(e) => errs.extend(e),
+            Err(e) if pkg == Pkg::Prelude => return Err(vec![e]),
+            Err(e) => errs.push(e),
         }
     }
     // user
@@ -420,16 +458,20 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
         return Err(errs);
     }
 
-    let prog = program::build(sources, target)?;
-    let mut g = Global::new(&prog);
+    phase("parse");
+    // leaked so that it can be dropped on another thread at the end (see below)
+    let prog: &'static program::Program = Box::leak(Box::new(program::build(sources, target)?));
+    phase("program");
+    let mut g = Global::new(prog);
     let root_mod = prog.modules.iter().position(|m| m.path == root && m.pkg == Pkg::User);
     let mut entry = None;
     let mut tests = Vec::new();
     let mut platform_fns = Vec::new();
+    let mut platform_ids = Vec::new();
     if wit_ctx.is_some() {
         for name in PLATFORM_FNS {
             match prog.lookup(prog.prelude, name) {
-                Some(program::Def::Fn(fid)) => platform_fns.push(g.request(FnInst { fn_id: fid, targs: Vec::new() })),
+                Some(program::Def::Fn(fid)) => platform_ids.push(fid),
                 _ => return Err(internal(format!("internal error: platform function `{name}` is missing"))),
             }
         }
@@ -464,6 +506,10 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
         }
     }
     g.run();
+    if wit_ctx.is_some() {
+        platform_fns = elaborate_platform(&mut g, &platform_ids);
+    }
+    phase("elab");
     let mut warnings = prog.warnings.clone();
     warnings.extend(g.warnings.clone());
     if !g.errors.is_empty() {
@@ -474,13 +520,108 @@ pub fn compile(sm: &mut SourceMap, files: Vec<UserFile>, root: &str, target: &st
     if mode == Mode::Check {
         return Ok(Compiled { wasm: Vec::new(), component: None, wat: String::new(), tests: Vec::new(), warnings, has_main });
     }
+    crate::opt::run(&mut g);
+    phase("opt");
     let plat = if wit_ctx.is_some() { Some(platform_fns.as_slice()) } else { None };
     let out = codegen::generate(&prog, &g, if plat.is_some() { None } else { entry }, &tests, plat).map_err(internal)?;
+    phase("codegen");
     let component = match &wit_ctx {
         Some(w) => Some(w.encode(&out.wasm).map_err(|e| internal(format!("internal error: component encoding failed: {e}")))?),
         None => None,
     };
+    phase("component");
+    // freeing the program, its IR and the WIT resolve takes several milliseconds, which
+    // `pud run` would otherwise spend before the program starts
+    std::thread::spawn(move || {
+        drop(g);
+        drop(wit_ctx);
+        // SAFETY: `prog` was leaked from a Box above and `g`, its only borrower, is gone
+        drop(unsafe { Box::from_raw(prog as *const program::Program as *mut program::Program) });
+    });
     Ok(Compiled { wasm: out.wasm, component, wat: out.wat, tests: out.tests, warnings, has_main })
+}
+
+/// Elaborates the platform layer once the program is elaborated. The host operation
+/// dispatchers (`__plat_host`, `__plat_host_async`) keep only the arms for operation
+/// numbers the program uses, so a program that never touches files or HTTP does not
+/// carry their bindings. Elaborating the platform layer can reach code that uses more
+/// operations; the dispatchers are then elaborated again until the set is stable.
+fn elaborate_platform(g: &mut Global, ids: &[crate::types::FnId]) -> Vec<usize> {
+    let prog = g.prog;
+    let dispatchers: Vec<crate::types::FnId> = ["__plat_host", "__plat_host_async"].iter().filter_map(|n| match prog.lookup(prog.prelude, n) {
+        Some(program::Def::Fn(fid)) => Some(fid),
+        _ => None,
+    }).collect();
+    let mut kept: Option<std::collections::BTreeSet<i128>> = None;
+    let mut idxs = Vec::new();
+    for round in 0..8 {
+        let used = host_ops(g);
+        if round > 0 && (kept == used || matches!((&kept, &used), (Some(k), Some(u)) if u.is_subset(k))) {
+            break;
+        }
+        g.body_override.clear();
+        if let Some(u) = &used {
+            for &fid in &dispatchers {
+                if let Some(b) = prog.fns[fid].decl.body.as_ref().and_then(|b| prune_ops(b, u)) {
+                    g.body_override.insert(fid, b);
+                }
+            }
+        }
+        if round == 0 {
+            idxs = ids.iter().map(|&fid| g.request(FnInst { fn_id: fid, targs: Vec::new() })).collect();
+        } else {
+            for &fid in &dispatchers {
+                g.reelaborate(FnInst { fn_id: fid, targs: Vec::new() });
+            }
+        }
+        g.run();
+        kept = used;
+        if kept.is_none() {
+            break;
+        }
+    }
+    idxs
+}
+
+/// The operation numbers passed to the `host` intrinsics, or None if one is not a literal.
+fn host_ops(g: &Global) -> Option<std::collections::BTreeSet<i128>> {
+    let mut ops = std::collections::BTreeSet::new();
+    let mut all = false;
+    for f in g.funcs.iter().flatten() {
+        crate::opt::visit(&f.body, &mut |e| {
+            if let crate::ir::ExprKind::Intrinsic(name, _, args) = &e.kind {
+                if name == "host" || name == "host_async" {
+                    match args.first().map(|a| &a.kind) {
+                        Some(crate::ir::ExprKind::Lit(crate::ir::Lit::Int(v))) => {
+                            ops.insert(*v);
+                        }
+                        _ => all = true,
+                    }
+                }
+            }
+        });
+    }
+    if all { None } else { Some(ops) }
+}
+
+/// The body with the arms of its `match op` that handle unused operations removed.
+fn prune_ops(body: &ast::Block, used: &std::collections::BTreeSet<i128>) -> Option<ast::Block> {
+    let tail = body.tail.as_ref()?;
+    let ast::ExprKind::Match { scrut, arms } = &tail.kind else { return None };
+    if !matches!(&scrut.kind, ast::ExprKind::Name(id, _) if id.name == "op") {
+        return None;
+    }
+    fn keep(p: &ast::Pattern, used: &std::collections::BTreeSet<i128>) -> bool {
+        match &p.kind {
+            ast::PatKind::Lit(ast::LitPat::Int(v)) => used.contains(v),
+            ast::PatKind::Or(ps) => ps.iter().any(|p| keep(p, used)),
+            _ => true,
+        }
+    }
+    let arms: Vec<ast::Arm> = arms.iter().filter(|a| keep(&a.pat, used)).cloned().collect();
+    let mut b = body.clone();
+    b.tail = Some(Box::new(ast::Expr { kind: ast::ExprKind::Match { scrut: scrut.clone(), arms }, ..(**tail).clone() }));
+    Some(b)
 }
 
 fn internal_user(m: String) -> Vec<Diag> {

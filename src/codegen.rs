@@ -1304,6 +1304,16 @@ impl<'a> Cg<'a> {
                 let an = self.tname(&args[0].ty);
                 st.emit(&format!("array.copy {an} {an} i32.const 0"));
             }
+            "select" => {
+                // evaluate in source order, then a branch-free wasm select
+                let c = self.temp_raw(st, "i32");
+                self.gen_expr(st, &args[0]);
+                st.emit(&format!("local.set {c}"));
+                self.gen_expr(st, &args[1]);
+                self.gen_expr(st, &args[2]);
+                let rv = self.vt(ret);
+                st.emit(&format!("local.get {c} select (result {rv})"));
+            }
             "array_fill" => {
                 for a in args {
                     self.gen_expr(st, a);
@@ -1933,6 +1943,7 @@ pub fn generate(prog: &Program, g: &Global, entry: Option<usize>, tests: &[(Stri
         let _ = writeln!(out, "(data $d{i} {})", wat_str(d));
     }
     out.push_str(")\n");
+    crate::driver::phase("codegen wat");
     let wasm = wat::parse_str(&out).map_err(|e| format!("internal error: generated WAT failed to assemble: {e}"))?;
     let mut features = wasmparser::WasmFeatures::default();
     features.insert(wasmparser::WasmFeatures::GC);

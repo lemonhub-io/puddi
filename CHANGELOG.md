@@ -14,7 +14,11 @@ Measured with the programs in `bench/` against Rust and MoonBit; see `bench/READ
 - Integer overflow checks for `Int` addition and subtraction are emitted inline, and left out where the operands' ranges show they cannot overflow (for example `i += 1` inside `while i < n`)
 - `list[i]` compiles to a single unsigned bounds check and an array access instead of calls through `Index`; `for x in list` walks the list by index without allocating an `Option` per element
 - Iterator adapters implement `fold` by internal iteration, so chains ending in `fold`, `count`, `collect` or `for_each` allocate nothing per element
-- `List.sort` compares with `<` directly instead of through a closure; `List.filled` and `StrBuilder.push` copy in bulk
+- `List.sort` compares with `<` directly instead of through a closure and merges without branches; lists of integers of 256 or more elements are sorted by radix; `List.filled` and `StrBuilder.push` copy in bulk
+- A new IR optimizer inlines closures passed to higher-order functions, tiny functions, matches on constructors returned by small functions and one level of small recursive functions: iterator chains run 45x faster on Wasmtime, and `Option` results of `Map.get` or `to_int` are no longer allocated when unwrapped at once (`PUD_NO_OPT=1` turns it off)
+- `Map.insert` finds the key or a free slot in one probe
+- `PUD_HOST=node pud run` starts Node.js with `--no-liftoff`: V8 cannot move a running wasm loop to optimized code, so loops in `main` stayed in the baseline tier
+- `pud run` compiles faster (parallel parsing, shared declarations, only the platform operations a program uses) and starts Wasmtime on another thread while compiling: `hello` runs in 75 ms instead of 160 ms; `PUD_TIME=1` prints the time of each phase
 
 ### Documentation
 

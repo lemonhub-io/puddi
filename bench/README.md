@@ -39,17 +39,17 @@ Kernel time in ms (multiple of Rust):
 
 | | Rust | MoonBit native | MoonBit wasm-gc | Puddi on V8 | Puddi on Wasmtime |
 |---|---|---|---|---|---|
-| fib | 69 | 101 (1.5x) | 93 (1.3x) | 105 (1.5x) | 157 (2.3x) |
-| sieve | 20 | 23 (1.2x) | 48 (2.4x) | 75 (3.8x) | 49 (2.5x) |
-| nbody | 133 | 176 (1.3x) | 179 (1.3x) | 179 (1.3x) | 198 (1.5x) |
-| trees | 3936 | 2022 (0.5x) | 525 (0.1x) | 573 (0.1x) | 1024 (0.3x) |
-| mandel | 135 | 138 (1.0x) | 335 (2.5x) | 346 (2.6x) | 196 (1.5x) |
-| hashmap | 39 | 279 (7.3x) | 264 (6.9x) | 73 (1.9x) | 110 (2.9x) |
-| strings | 14 | 115 (8.2x) | 63 (4.5x) | 92 (6.5x) | 95 (6.7x) |
-| sort | 14 | 73 (5.1x) | 79 (5.5x) | 141 (9.8x) | 141 (9.9x) |
-| iter | 7 | 59 (8.5x) | 58 (8.3x) | 45 (6.4x) | 381 (55x) |
-| dyn | 40 | 22 (0.5x) | 75 (1.9x) | 105 (2.6x) | 174 (4.3x) |
-| **geomean** | 1.00x | 2.10x | 2.28x | 2.38x | 3.27x |
+| fib | 69 | 101 (1.5x) | 93 (1.3x) | 88 (1.3x) | 85 (1.2x) |
+| sieve | 20 | 23 (1.2x) | 48 (2.4x) | 43 (2.2x) | 48 (2.4x) |
+| nbody | 133 | 176 (1.3x) | 179 (1.3x) | 190 (1.4x) | 216 (1.6x) |
+| trees | 3936 | 2022 (0.5x) | 525 (0.1x) | 572 (0.1x) | 957 (0.2x) |
+| mandel | 135 | 138 (1.0x) | 335 (2.5x) | 139 (1.0x) | 197 (1.5x) |
+| hashmap | 39 | 279 (7.3x) | 264 (6.9x) | 48 (1.3x) | 75 (2.0x) |
+| strings | 14 | 115 (8.2x) | 63 (4.5x) | 77 (5.5x) | 89 (6.3x) |
+| sort | 14 | 73 (5.1x) | 79 (5.5x) | 21 (1.4x) | 41 (2.8x) |
+| iter | 7 | 59 (8.5x) | 58 (8.3x) | 10 (1.4x) | 11 (1.6x) |
+| dyn | 40 | 22 (0.5x) | 75 (1.9x) | 49 (1.2x) | 184 (4.5x) |
+| **geomean** | 1.00x | 2.10x | 2.28x | 1.26x | 1.84x |
 
 `trees` is faster than Rust in every GC language because Rust frees each tree node by node, while a garbage collector discards a dead tree at once. The Rust programs are plain idiomatic code (std `HashMap` with SipHash, `Box`, `sort`), not tuned.
 
@@ -57,24 +57,26 @@ Kernel time in ms (multiple of Rust):
 
 | | 0.1.0 on V8 | now | 0.1.0 on Wasmtime | now |
 |---|---|---|---|---|
-| hello (wall) | 120 | 129 | 160 | 110 |
-| fib | 235 | 105 (2.2x) | 397 | 157 (2.5x) |
-| sieve | 183 | 75 (2.4x) | 230 | 49 (4.7x) |
-| nbody | 269 | 179 (1.5x) | 1099 | 198 (5.6x) |
-| trees | 993 | 573 (1.7x) | 2818 | 1024 (2.8x) |
-| mandel | 385 | 346 (1.1x) | 327 | 196 (1.7x) |
-| hashmap | 89 | 73 (1.2x) | 160 | 110 (1.5x) |
-| strings | 115 | 92 (1.3x) | 148 | 95 (1.6x) |
-| sort | 260 | 141 (1.8x) | 5382 | 141 (38x) |
-| iter | 67 | 45 (1.5x) | 492 | 381 (1.3x) |
-| dyn | 147 | 105 (1.4x) | 539 | 174 (3.1x) |
-| **geomean vs Rust** | 3.98x | 2.38x | 11.03x | 3.27x |
+| hello (wall) | 120 | 123 | 160 | 75 |
+| fib | 235 | 88 (2.7x) | 397 | 85 (4.7x) |
+| sieve | 183 | 43 (4.3x) | 230 | 48 (4.8x) |
+| nbody | 269 | 190 (1.4x) | 1099 | 216 (5.1x) |
+| trees | 993 | 572 (1.7x) | 2818 | 957 (2.9x) |
+| mandel | 385 | 139 (2.8x) | 327 | 197 (1.7x) |
+| hashmap | 89 | 48 (1.9x) | 160 | 75 (2.1x) |
+| strings | 115 | 77 (1.5x) | 148 | 89 (1.7x) |
+| sort | 260 | 21 (12.6x) | 5382 | 41 (132x) |
+| iter | 67 | 10 (7.0x) | 492 | 11 (45x) |
+| dyn | 147 | 49 (3.0x) | 539 | 184 (2.9x) |
+| **geomean vs Rust** | 3.98x | 1.26x | 11.03x | 1.84x |
 
-The changes are listed in the changelog under Unreleased. In short: Wasmtime's copying collector instead of reference counting (reference-count barriers made `sort` take 5 s), Cranelift inlining, a 16 MiB starting GC heap, a compiled-code cache, shared instances for payload-less enum variants, inline overflow checks plus range analysis to drop impossible ones, direct `List` indexing, allocation-free `for` over lists and internal iteration for iterator chains.
+The changes are listed in the changelog under Unreleased. In short: Wasmtime's copying collector instead of reference counting (reference-count barriers made `sort` take 5 s), Cranelift inlining, a 16 MiB starting GC heap, a compiled-code cache, shared instances for payload-less enum variants, inline overflow checks plus range analysis to drop impossible ones, direct `List` indexing, allocation-free `for` over lists, internal iteration for iterator chains, an IR optimizer that inlines closures and constructor matches (`src/opt.rs`), radix sort for integer lists, single-probe `Map` inserts, V8 without its Liftoff baseline tier, and a faster compiler start-up.
 
 ### Remaining gaps
 
-- **Iterator chains on Wasmtime** (`iter`, 55x): each element passes through one `call_ref` per closure; V8 inlines them speculatively, Cranelift cannot. Specializing higher-order functions per closure at compile time would remove the indirect calls.
-- **Output size**: every Puddi program is about 290 KB (124 KB core module), against 0.3 to 13 KB for MoonBit's wasm-gc output, because the platform layer and runtime are linked in whole. Dead-code elimination of unused functions and data is the next big step.
-- **Memory**: Puddi needs 24 MB (V8) or 38 MB (Wasmtime) for `hello`, against 6 MB for `moonrun`; most of it is the engine.
-- **`dyn` calls** go through a shim that casts `anyref` back to the concrete type; storing the vtable in the object would save the cast and one indirection.
+- **`dyn` calls on Wasmtime** (4.5x): each call goes through a shim that casts `anyref` back to the concrete type, and Cranelift does not inline `call_ref`. Storing the vtable in the object would save the cast and one indirection.
+- **`trees` on Wasmtime**: its copying collector grows the GC heap only when a collection frees too little, so it collects often near capacity; V8's generational collector is 1.7x faster here.
+- **`strings`** (5-6x): string building copies through linear memory and `Map<Str, Int>` hashes byte by byte.
+- **Start-up**: `pud run hello` takes 75 ms on Wasmtime, about 30 ms of it the process launch on Windows and 45 ms compiling (half of that in parsing the generated WIT bindings and the WAT text).
+- **Output size**: every Puddi program is about 230 KB (98 KB core module), against 0.3 to 13 KB for MoonBit's wasm-gc output, because the platform layer and runtime are linked in whole.
+- **Memory**: Puddi needs 26 MB (V8) or 52 MB (Wasmtime) for `hello`, against 6 MB for `moonrun`; most of it is the engine.

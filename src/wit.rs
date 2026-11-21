@@ -140,7 +140,12 @@ impl Wit {
 
     /// Select the target world and add `extra` interface imports to it.
     pub fn load(pkg_dir: Option<&Path>, world_spec: &str, extra_names: &[String], extra_exports: &[String]) -> Result<Wit, String> {
-        let (mut resolve, own) = Wit::new(pkg_dir)?;
+        let (resolve, own) = Wit::new(pkg_dir)?;
+        Wit::load_with(resolve, own, world_spec, extra_names, extra_exports)
+    }
+
+    /// `load` on packages already loaded by `Wit::new`.
+    pub fn load_with(mut resolve: Resolve, own: Option<wit_parser::PackageId>, world_spec: &str, extra_names: &[String], extra_exports: &[String]) -> Result<Wit, String> {
         let base = Wit::select(&resolve, own, world_spec)?;
         let have: BTreeSet<InterfaceId> = resolve.worlds[base].imports.values().filter_map(|it| match it {
             WorldItem::Interface { id, .. } => Some(*id),

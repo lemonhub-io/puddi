@@ -1,7 +1,7 @@
 //! Item collection, name resolution and signature resolution.
 
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::ast::{self, TypeArg, TypeExpr};
 use crate::diag::{Diag, Span};
@@ -127,7 +127,7 @@ pub struct FnDef {
     pub has_self: bool,
     pub self_ty: Option<Ty>,
     pub ret: Ty,
-    pub decl: Rc<ast::FnDecl>,
+    pub decl: Arc<ast::FnDecl>,
     pub owner: FnOwner,
     pub is_pub: bool,
     pub span: Span,
@@ -849,7 +849,7 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
                 }
                 ast::ItemKind::Impl(id) => pending_impls.push(PendingImpl { module: mid, decl: id.clone(), span: item.span, pkg: s.pkg }),
                 ast::ItemKind::Test { name, body } => {
-                    let fd = ast::FnDecl {
+                    let fd = Arc::new(ast::FnDecl {
                         name: ast::Ident { name: format!("$test{}", p.fns.len()), span: item.span },
                         is_async: false,
                         generics: Vec::new(),
@@ -860,7 +860,7 @@ pub fn build(sources: Vec<ModSource>, target: &str) -> Result<Program, Vec<Diag>
                         attrs: Vec::new(),
                         is_pub: false,
                         span: item.span,
-                    };
+                    });
                     let mut f = placeholder_fn(&fd, mid, s.pkg);
                     f.test_name = Some(name.clone());
                     f.ret = Ty::Unit;
@@ -1330,7 +1330,7 @@ fn resolve_self_proj(p: &Program, t: &Ty, iid: ImplId) -> Ty {
     }
 }
 
-fn placeholder_fn(fd: &ast::FnDecl, module: ModId, pkg: Pkg) -> FnDef {
+fn placeholder_fn(fd: &Arc<ast::FnDecl>, module: ModId, pkg: Pkg) -> FnDef {
     FnDef {
         name: fd.name.name.clone(),
         module,
@@ -1340,7 +1340,7 @@ fn placeholder_fn(fd: &ast::FnDecl, module: ModId, pkg: Pkg) -> FnDef {
         has_self: fd.has_self,
         self_ty: None,
         ret: Ty::Error,
-        decl: Rc::new(fd.clone()),
+        decl: fd.clone(),
         owner: FnOwner::Free,
         is_pub: fd.is_pub,
         span: fd.span,
@@ -1354,7 +1354,7 @@ fn placeholder_fn(fd: &ast::FnDecl, module: ModId, pkg: Pkg) -> FnDef {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn resolve_fn(p: &Program, fd: &ast::FnDecl, module: ModId, outer: &[GenericDef], self_ty: Option<Ty>, owner: FnOwner, is_pub: bool, pkg: Pkg) -> Result<FnDef, Diag> {
+fn resolve_fn(p: &Program, fd: &Arc<ast::FnDecl>, module: ModId, outer: &[GenericDef], self_ty: Option<Ty>, owner: FnOwner, is_pub: bool, pkg: Pkg) -> Result<FnDef, Diag> {
     let mut names: Vec<String> = outer.iter().map(|g| g.name.clone()).collect();
     for g in &fd.generics {
         if names.contains(&g.name.name) {
@@ -1434,7 +1434,7 @@ fn resolve_fn(p: &Program, fd: &ast::FnDecl, module: ModId, outer: &[GenericDef]
         has_self: fd.has_self,
         self_ty,
         ret,
-        decl: Rc::new(fd.clone()),
+        decl: fd.clone(),
         owner,
         is_pub,
         span: fd.span,

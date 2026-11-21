@@ -77,7 +77,7 @@ fn exit_code(e: &wasmtime::Error) -> u8 {
 
 /// Runs the component and returns the process exit code.
 pub fn run(component: &[u8], program: &str, args: &[String]) -> u8 {
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let rt = match runtime() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("error: cannot start the async runtime: {e}");
@@ -90,7 +90,43 @@ pub fn run(component: &[u8], program: &str, args: &[String]) -> u8 {
     }
 }
 
+type Warm = (wasmtime::Result<Engine>, std::io::Result<tokio::runtime::Runtime>);
+static PREWARM: std::sync::Mutex<Option<std::thread::JoinHandle<Warm>>> = std::sync::Mutex::new(None);
+static WARM_ENGINE: std::sync::Mutex<Option<wasmtime::Result<Engine>>> = std::sync::Mutex::new(None);
+
+/// Starts creating the engine and the async runtime on another thread, so that it
+/// overlaps compiling the program.
+pub fn prewarm() {
+    if let Ok(mut slot) = PREWARM.lock() {
+        *slot = Some(std::thread::spawn(|| (new_engine(), new_runtime())));
+    }
+}
+
+fn new_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread().enable_all().build()
+}
+
+/// The prewarmed runtime (keeping the prewarmed engine for `engine`), or a new one.
+fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    if let Some(h) = PREWARM.lock().ok().and_then(|mut slot| slot.take()) {
+        if let Ok((engine, rt)) = h.join() {
+            if let Ok(mut e) = WARM_ENGINE.lock() {
+                *e = Some(engine);
+            }
+            return rt;
+        }
+    }
+    new_runtime()
+}
+
 fn engine() -> wasmtime::Result<Engine> {
+    if let Some(e) = WARM_ENGINE.lock().ok().and_then(|mut e| e.take()) {
+        return e;
+    }
+    new_engine()
+}
+
+fn new_engine() -> wasmtime::Result<Engine> {
     let mut config = Config::new();
     config.wasm_component_model_async(true);
     config.wasm_component_model_more_async_builtins(true);
@@ -106,12 +142,12 @@ fn engine() -> wasmtime::Result<Engine> {
         Ok("drc") => wasmtime::Collector::DeferredReferenceCounting,
         _ => wasmtime::Collector::Copying,
     });
-    // small runtime helpers (List indexing, overflow checks, iterator adapters) are
-    // separate wasm functions; Cranelift only removes their call overhead when inlining
     // a 16 MiB starting heap avoids most early collections and regrowths (sorting a million
     // numbers runs 1.7x faster) for a few MiB more memory; PUD_WASMTIME_HEAP_MB overrides it
     let heap_mb = std::env::var("PUD_WASMTIME_HEAP_MB").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(16);
     config.gc_heap_initial_size(heap_mb << 20);
+    // small runtime helpers (List indexing, overflow checks, iterator adapters) are
+    // separate wasm functions; Cranelift only removes their call overhead when inlining
     if std::env::var("PUD_WASMTIME_INLINE").as_deref() != Ok("0") {
         config.compiler_inlining(wasmtime::Inlining::Yes);
     }
@@ -246,17 +282,22 @@ fn spawn_worker(shared: Arc<Shared>, entry: u32, inbox: UnboundedReceiver<String
 }
 
 async fn run_async(bytes: &[u8], program: &str, args: &[String]) -> wasmtime::Result<u8> {
+    use crate::driver::phase;
     let engine = engine()?;
+    phase("engine");
     let mut linker = Linker::<State>::new(&engine);
     wasmtime_wasi::p3::add_to_linker(&mut linker)?;
     wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
     add_workers(&mut linker)?;
+    phase("linker");
     let component = load_component(&engine, bytes)?;
+    phase("load component");
     let mut argv = vec![program.to_string()];
     argv.extend(args.iter().cloned());
     let shared = Arc::new(Shared { engine: engine.clone(), component: component.clone(), linker: linker.clone(), argv: argv.clone() });
     let mut store = Store::new(&engine, new_state(&argv, Some(shared))?);
     let command = Command::instantiate_async(&mut store, &component, &linker).await?;
+    phase("instantiate");
     let result = store.run_concurrent(async move |store| command.wasi_cli_run().call_run(store).await).await??;
     Ok(if result.is_ok() { 0 } else { 1 })
 }
@@ -347,7 +388,7 @@ fn show_val(v: &wasmtime::component::Val) -> String {
 /// Calls export `name` of a plugin component with arguments parsed from text
 /// and prints the result. Host imports that the runtime does not provide trap.
 pub fn invoke(component: &[u8], program: &str, name: &str, args: &[String]) -> u8 {
-    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+    let rt = match runtime() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("error: cannot start the async runtime: {e}");

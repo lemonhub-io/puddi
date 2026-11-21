@@ -15,6 +15,7 @@ mod lexer;
 mod numeric;
 mod parser;
 mod program;
+mod opt;
 mod ranges;
 #[cfg(feature = "runtime")]
 mod runner;
@@ -197,7 +198,8 @@ struct BuildResult {
     component: Option<(PathBuf, Vec<u8>)>,
 }
 
-fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat: bool) -> Result<BuildResult, ExitCode> {
+/// `ephemeral`: the component is only run in this process, so nothing is written to disk.
+fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat: bool, ephemeral: bool) -> Result<BuildResult, ExitCode> {
     let mut sm = SourceMap::default();
     let name = proj.name.clone();
     // tests run on the JavaScript host; everything else for wasi/plugin is a component
@@ -225,6 +227,11 @@ fn build(proj: Project, target: &str, mode: Mode, out: Option<PathBuf>, emit_wat
     report(&sm, &compiled.warnings);
     if mode == Mode::Check {
         return Ok(BuildResult { out_dir: PathBuf::new(), wasm_path: PathBuf::new(), component: None });
+    }
+    if ephemeral && !emit_wat {
+        if let Some(c) = compiled.component {
+            return Ok(BuildResult { out_dir: PathBuf::new(), wasm_path: PathBuf::new(), component: Some((PathBuf::new(), c)) });
+        }
     }
     let out_dir = match out {
         Some(o) => o,
@@ -298,7 +305,10 @@ fn json_str(s: &str) -> String {
 }
 
 fn node_run(res: &BuildResult, cmd: &str, args: &[String]) -> ExitCode {
-    let status = Command::new("node").arg(res.out_dir.join("puddi.mjs")).arg(cmd).arg(&res.wasm_path).args(args).status();
+    // V8 has no on-stack replacement for wasm: a loop in a function that runs once (often
+    // `main`) stays in Liftoff's baseline code for good. Compiling with TurboFan only makes
+    // such loops 2-3x faster for a few milliseconds of start-up.
+    let status = Command::new("node").arg("--no-liftoff").arg(res.out_dir.join("puddi.mjs")).arg(cmd).arg(&res.wasm_path).args(args).status();
     match status {
         Ok(s) => match s.code() {
             Some(c) => ExitCode::from(c.clamp(0, 255) as u8),
@@ -356,6 +366,7 @@ fn new_package(name: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    driver::phase("main");
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(cmd) = args.first().cloned() else {
         print!("{}", usage());
@@ -420,10 +431,18 @@ fn main() -> ExitCode {
             };
             let has_dir = proj.dir.is_some();
             let program_name = proj.name.clone();
-            let res = match build(proj, &target, mode, out, emit_wat) {
+            // a single file run by the embedded runtime needs no files on disk, and the
+            // engine can be created while the program compiles
+            let embedded = cmd == "run" && target != "browser" && std::env::var("PUD_HOST").as_deref() != Ok("node") && cfg!(feature = "runtime");
+            #[cfg(feature = "runtime")]
+            if embedded {
+                runner::prewarm();
+            }
+            let res = match build(proj, &target, mode, out.clone(), emit_wat, embedded && !has_dir && out.is_none()) {
                 Ok(r) => r,
                 Err(c) => return c,
             };
+            driver::phase("built");
             match cmd.as_str() {
                 "build" => {
                     println!("built {}", res.component.as_ref().map(|c| &c.0).unwrap_or(&res.wasm_path).display());
@@ -435,7 +454,7 @@ fn main() -> ExitCode {
                 },
                 "run" if res.component.is_some() && std::env::var("PUD_HOST").as_deref() != Ok("node") => {
                     let code = run_component(&res, &program_name, prog_args);
-                    if !has_dir {
+                    if !has_dir && !res.out_dir.as_os_str().is_empty() {
                         let _ = std::fs::remove_dir_all(&res.out_dir);
                     }
                     code

@@ -1,0 +1,56 @@
+// Integer lists sort by radix from 256 elements on, by merging below that.
+
+fn sorted_ok<T: Ord>(xs: List<T>) -> Bool {
+    var i = 1
+    while i < xs.len() {
+        if xs[i] < xs[i - 1] { return false }
+        i += 1
+    }
+    true
+}
+
+fn main() {
+    let a: List<Int> = []
+    var i = 0
+    while i < 300 {
+        a.push(i * 7919 % 1000 - 500)
+        i += 1
+    }
+    a.push(2147483647)
+    a.push(-2147483648)
+    a.sort()
+    print("{a[0]} {a[1]} {a[2]} {a[a.len() - 2]} {a[a.len() - 1]} {sorted_ok(a)}")
+
+    var s: I64 = 99
+    let b: List<I64> = []
+    let c: List<I8> = []
+    let d: List<U64> = []
+    let e: List<U16> = []
+    let f: List<Int> = []
+    var sum_b: I64 = 0
+    i = 0
+    while i < 2000 {
+        s = (s * 1103515245 + 12345) % 2147483648
+        let v = (s - 1073741824) * 4000000007
+        b.push(v)
+        sum_b += v % 1000
+        c.push((s % 256 - 128).to_i8().unwrap())
+        d.push(s.to_u64().unwrap() * 4294967291)
+        e.push((s % 65536).to_u16().unwrap())
+        if i < 100 { f.push((s % 1000).to_int().unwrap() - 500) }
+        i += 1
+    }
+    b.sort()
+    c.sort()
+    d.sort()
+    e.sort()
+    f.sort()
+    var sum_after: I64 = 0
+    for v in b { sum_after += v % 1000 }
+    print("{sorted_ok(b)} {sum_b == sum_after} {b.len()}")
+    print("{sorted_ok(c)} {c[0]} {c[c.len() - 1]}")
+    print("{sorted_ok(d)} {sorted_ok(e)} {sorted_ok(f)} {f.len()}")
+    let words = ["pear", "apple", "fig"]
+    words.sort()
+    print(words)
+}

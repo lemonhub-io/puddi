@@ -9,6 +9,11 @@
 @intrinsic("array_set") fn __array_set<T>(a: Array<T>, i: Int, v: T)
 @intrinsic("array_copy") fn __array_copy<T>(dst: Array<T>, di: Int, src: Array<T>, si: Int, n: Int)
 @intrinsic("array_fill") fn __array_fill<T>(a: Array<T>, i: Int, v: T, n: Int)
+@intrinsic("select") fn __select<T>(c: Bool, a: T, b: T) -> T
+// answered during elaboration; `if __is_int<T>() { A } else { B }` elaborates only one branch
+@intrinsic("is_int") fn __is_int<T>() -> Bool
+@intrinsic("int_bits") fn __int_bits<T>() -> Int
+@intrinsic("int_signed") fn __int_signed<T>() -> Bool
 @intrinsic("array_get") fn __bytes_get(a: Array<U8>, i: Int) -> Int
 @intrinsic("array_set") fn __bytes_set(a: Array<U8>, i: Int, v: Int)
 @intrinsic("str_len") fn __str_len(s: Str) -> Int
@@ -1559,6 +1564,7 @@ impl<T> List<T> {
     }
     /// Stable merge sort using a comparison function.
     pub fn sort_by(self, cmp: fn(T, T) -> Ordering) {
+        // stable bottom-up merge sort
         let n = self.len
         if n < 2 { return }
         var src = self.data
@@ -1568,19 +1574,25 @@ impl<T> List<T> {
             var lo = 0
             while lo < n {
                 let mid = if lo + width < n { lo + width } else { n }
-                let hi = if lo + 2 * width < n { lo + 2 * width } else { n }
+                let hi = if mid + width < n { mid + width } else { n }
                 var i = lo
                 var j = mid
                 var k = lo
-                while k < hi {
-                    if i < mid && (j >= hi || !cmp(__array_get(src, j), __array_get(src, i)).is_lt()) {
-                        __array_set(dst, k, __array_get(src, i))
-                        i += 1
-                    } else {
-                        __array_set(dst, k, __array_get(src, j))
-                        j += 1
-                    }
+                // branch-free merge step: which side to take is data dependent and
+                // unpredictable, so select the value and advance both indices arithmetically
+                while i < mid && j < hi {
+                    let a = __array_get(src, i)
+                    let b = __array_get(src, j)
+                    let left = !(cmp(b, a).is_lt())
+                    __array_set(dst, k, __select(left, a, b))
+                    i += __select(left, 1, 0)
+                    j += __select(left, 0, 1)
                     k += 1
+                }
+                if i < mid {
+                    __array_copy(dst, k, src, i, mid - i)
+                } else if j < hi {
+                    __array_copy(dst, k, src, j, hi - j)
                 }
                 lo = hi
             }
@@ -1595,10 +1607,17 @@ impl<T> List<T> {
         self.sort_by(|a, b| key(a).cmp(key(b)))
     }
     pub fn sort(self) {
-        // the same stable merge sort as sort_by, comparing with `<` directly: generic code is
-        // elaborated per type, so for numbers this is one instruction instead of a closure call
+        // the same merge sort as sort_by, comparing with `<` directly: generic code is
+        // elaborated per type, so for numbers this is one instruction instead of a call
         let n = self.len
         if n < 2 { return }
+        if __is_int<T>() {
+            // integers sort by radix, which is stable as well and does no comparisons
+            if n >= 256 {
+                self.__radix_sort()
+                return
+            }
+        }
         var src = self.data
         var dst: Array<T> = __array_new(n)
         var width = 1
@@ -1606,19 +1625,25 @@ impl<T> List<T> {
             var lo = 0
             while lo < n {
                 let mid = if lo + width < n { lo + width } else { n }
-                let hi = if lo + 2 * width < n { lo + 2 * width } else { n }
+                let hi = if mid + width < n { mid + width } else { n }
                 var i = lo
                 var j = mid
                 var k = lo
-                while k < hi {
-                    if i < mid && (j >= hi || !(__array_get(src, j) < __array_get(src, i))) {
-                        __array_set(dst, k, __array_get(src, i))
-                        i += 1
-                    } else {
-                        __array_set(dst, k, __array_get(src, j))
-                        j += 1
-                    }
+                // branch-free merge step: which side to take is data dependent and
+                // unpredictable, so select the value and advance both indices arithmetically
+                while i < mid && j < hi {
+                    let a = __array_get(src, i)
+                    let b = __array_get(src, j)
+                    let left = !(b < a)
+                    __array_set(dst, k, __select(left, a, b))
+                    i += __select(left, 1, 0)
+                    j += __select(left, 0, 1)
                     k += 1
+                }
+                if i < mid {
+                    __array_copy(dst, k, src, i, mid - i)
+                } else if j < hi {
+                    __array_copy(dst, k, src, j, hi - j)
                 }
                 lo = hi
             }
@@ -1626,6 +1651,61 @@ impl<T> List<T> {
             src = dst
             dst = t
             width *= 2
+        }
+        self.data = src
+    }
+    /// LSD radix sort on the bytes of an integer element type (only called for integers).
+    fn __radix_sort(self) {
+        let n = self.len
+        let bytes = __int_bits<T>() / 8
+        // flipping the sign bit makes signed order the unsigned order of the bit patterns
+        let one: U64 = 1
+        let flip: U64 = if __int_signed<T>() { one << __cast<Int, U64>(bytes * 8 - 1) } else { 0 }
+        let top = one << __cast<Int, U64>(bytes * 8 - 1)
+        let mask: U64 = top | (top - 1)
+        var src = self.data
+        var dst: Array<T> = __array_new(n)
+        let counts: Array<Int> = __array_new(256 * bytes)
+        var i = 0
+        while i < n {
+            let k = (__cast<T, U64>(__array_get(src, i)) ^ flip) & mask
+            var p = 0
+            while p < bytes {
+                let c = p * 256 + __cast<U64, Int>((k >> __cast<Int, U64>(p * 8)) & 255)
+                __array_set(counts, c, __array_get(counts, c) + 1)
+                p += 1
+            }
+            i += 1
+        }
+        var p = 0
+        while p < bytes {
+            let base = p * 256
+            let shift = __cast<Int, U64>(p * 8)
+            let first = __cast<U64, Int>((((__cast<T, U64>(__array_get(src, 0)) ^ flip) & mask) >> shift) & 255)
+            // a pass where every element has the same byte changes nothing
+            if __array_get(counts, base + first) != n {
+                var sum = 0
+                var b = 0
+                while b < 256 {
+                    let c = __array_get(counts, base + b)
+                    __array_set(counts, base + b, sum)
+                    sum += c
+                    b += 1
+                }
+                i = 0
+                while i < n {
+                    let x = __array_get(src, i)
+                    let d = base + __cast<U64, Int>((((__cast<T, U64>(x) ^ flip) & mask) >> shift) & 255)
+                    let o = __array_get(counts, d)
+                    __array_set(dst, o, x)
+                    __array_set(counts, d, o + 1)
+                    i += 1
+                }
+                let t = src
+                src = dst
+                dst = t
+            }
+            p += 1
         }
         self.data = src
     }
@@ -1813,10 +1893,8 @@ impl<K: Eq + Hash, V> Map<K, V> {
         loop {
             let s = __array_get(self.slots, i)
             if s == 0 { return -1 }
-            if s > 0 {
-                let e = s - 1
-                if __array_get(self.live, e) && __array_get(self.keys, e) == k { return e }
-            }
+            // a positive slot always points at a live entry: removal turns the slot into -1
+            if s > 0 && __array_get(self.keys, s - 1) == k { return s - 1 }
             i = (i + 1) & mask
         }
     }
@@ -1858,11 +1936,32 @@ impl<K: Eq + Hash, V> Map<K, V> {
     }
     /// Inserts a value, returning the previous value for the key.
     pub fn insert(self, k: K, v: V) -> Option<V> {
-        let e = self.find(k)
-        if e >= 0 {
-            let old = __array_get(self.vals, e)
-            __array_set(self.vals, e, v)
-            return Some(old)
+        // one probe sequence finds either the key or the empty slot a new entry goes to;
+        // slots outnumber entries two to one, so an empty slot always exists
+        let ns = __array_len(self.slots)
+        if ns > 0 {
+            let mask = ns - 1
+            var i = k.hash() & mask
+            loop {
+                let s = __array_get(self.slots, i)
+                if s == 0 { break }
+                if s > 0 && __array_get(self.keys, s - 1) == k {
+                    let old = __array_get(self.vals, s - 1)
+                    __array_set(self.vals, s - 1, v)
+                    return Some(old)
+                }
+                i = (i + 1) & mask
+            }
+            let n = self.used
+            if n < __array_len(self.keys) {
+                __array_set(self.keys, n, k)
+                __array_set(self.vals, n, v)
+                __array_set(self.live, n, true)
+                self.used = n + 1
+                self.count += 1
+                __array_set(self.slots, i, n + 1)
+                return None
+            }
         }
         if self.used >= __array_len(self.keys) {
             self.rehash(self.count + 1)

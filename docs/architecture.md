@@ -5,7 +5,7 @@ This document walks through how `pud` turns Puddi source into a WebAssembly comp
 ## Overview
 
 ```text
- .pud sources ──► lexer ──► parser ──► derive ──► program ──► elab ──► codegen ──► core module
+ .pud sources ──► lexer ──► parser ──► derive ──► program ──► elab ──► opt ──► codegen ──► core module
  (user, std,                  (AST)    (@derive    (items,    (types,   (WAT, then   │
   prelude,                              as source)  names,     IR)       binary)     ▼
   platform,                                         signatures)                 wit-component
@@ -39,6 +39,8 @@ The prelude, standard modules and platform layer are embedded in the binary with
 **Program** (`program.rs`). Collects items from all modules, resolves imports and names, and resolves the signatures of functions, structs, enums, traits and impls. It enforces visibility, coherence and target filtering (`@target`).
 
 **Elaboration** (`elab.rs`, `types.rs`, `exhaust.rs`, `ir.rs`). Type inference and checking of function bodies, and lowering to a typed IR in which every type is concrete. Generic functions are checked per instantiation and monomorphized: `elab.rs` keeps a queue of function instances, seeded with the entry points and exports, and elaborates each instance once. Implicit widening, `?` with `From`, `dyn Trait` coercions, closures and their captured variables, and async functions are all lowered here. `exhaust.rs` checks `match` exhaustiveness with the usefulness algorithm.
+
+**Optimization** (`opt.rs`). Rewrites each function's IR before code generation: it inlines calls that receive a closure or a function value (so iterator chains and higher-order helpers become plain loops without `call_ref`), tiny functions, calls that match on a constructor argument (so `x.get(k).unwrap_or(0)` builds no `Option`), and the recursive calls of small recursive functions once; it then forwards immutable struct fields, selects `match` arms on known constructors and drops dead `let`s. `PUD_NO_OPT=1` skips it.
 
 **Code generation** (`codegen.rs`). Turns IR into WebAssembly text using WasmGC types: structs and enum variants become GC structs (enum variants are subtypes of a base struct), closures and trait objects are GC structs with function references, and integer overflow checks are inlined. `ranges.rs` tracks the value ranges of integer locals implied by `if` and `while` conditions, and codegen leaves out the overflow checks those ranges rule out. The text is assembled into a binary core module with the `wat` crate.
 

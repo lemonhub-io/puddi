@@ -1,0 +1,59 @@
+// Higher-order calls that the optimizer inlines, and closures it must leave alone.
+
+struct Pair {
+    f: fn(Int) -> Int,
+    g: fn(Int) -> Int,
+}
+
+fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+    f(x)
+}
+
+fn first_where(xs: List<Int>, p: fn(Int) -> Bool) -> Option<Int> {
+    for x in xs {
+        if p(x) {
+            return Some(x)
+        }
+    }
+    None
+}
+
+fn twice(p: Pair, x: Int) -> Int {
+    p.g(p.f(x))
+}
+
+fn count_until(limit: Int, stop: fn(Int) -> Bool) -> Int {
+    var n = 0
+    while n < limit {
+        if stop(n) {
+            break
+        }
+        n += 1
+    }
+    n
+}
+
+fn double(x: Int) -> Int {
+    x * 2
+}
+
+fn main() {
+    let k = 3
+    print((0..10).map(|x| x * k).filter(|x| x % 2 == 0).fold(0, |a, x| a + x))
+    print(first_where([5, 8, 11, 14], |x| x % 7 == 0))
+    print(first_where([1, 2], |x| x > 5))
+    for i in 0..3 {
+        let add = |x: Int| x + i
+        print(apply(add, 10))
+    }
+    var total = 0
+    [1, 2, 3, 4].iter().for_each(|x| total += x)
+    print(total)
+    let base = 100
+    print(twice(Pair { f: |x| x + base, g: |x| x * 2 }, 1))
+    print(apply(double, 21))
+    print(count_until(50, |n| n * n > 40))
+    let fs: List<fn(Int) -> Int> = [|x| x + 1, |x| x * 10]
+    print(fs.map(|f| apply(f, 4)))
+    print([3, 1, 2].map(|x| [x, x].iter().fold(0, |a, y| a + y)))
+}

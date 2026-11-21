@@ -8,18 +8,20 @@ pub struct Parser {
     toks: Vec<Token>,
     pos: usize,
     no_struct: bool,
+    /// tokens split by `expect_gt`, with their originals, so a failed speculative parse can undo them
+    splits: Vec<(usize, Token)>,
 }
 
 type PResult<T> = Result<T, Diag>;
 
 pub fn parse_module(toks: Vec<Token>) -> PResult<Module> {
-    let mut p = Parser { toks, pos: 0, no_struct: false };
+    let mut p = Parser { toks, pos: 0, no_struct: false, splits: Vec::new() };
     p.module()
 }
 
 /// Parse a standalone expression from an interpolation token list.
 pub fn parse_interp(toks: Vec<Token>) -> PResult<Expr> {
-    let mut p = Parser { toks, pos: 0, no_struct: false };
+    let mut p = Parser { toks, pos: 0, no_struct: false, splits: Vec::new() };
     let e = p.expr()?;
     if !p.at(&Tok::Eof) {
         return Err(p.unexpected("end of interpolation"));
@@ -103,6 +105,7 @@ impl Parser {
             }
             Tok::Ge => {
                 let sp = self.span();
+                self.splits.push((self.pos, self.toks[self.pos].clone()));
                 self.toks[self.pos].tok = Tok::Assign;
                 self.toks[self.pos].span = Span::new(sp.file, sp.lo + 1, sp.hi);
                 Ok(())
@@ -315,7 +318,7 @@ impl Parser {
         Ok(out)
     }
 
-    fn fn_decl(&mut self, attrs: Vec<Attribute>, is_pub: bool, body_required: bool) -> PResult<FnDecl> {
+    fn fn_decl(&mut self, attrs: Vec<Attribute>, is_pub: bool, body_required: bool) -> PResult<std::sync::Arc<FnDecl>> {
         let lo = self.span();
         let is_async = self.eat(&Tok::Async);
         self.expect(&Tok::Fn, "`fn`")?;
@@ -357,7 +360,7 @@ impl Parser {
             let _ = body_required;
             None
         };
-        Ok(FnDecl { name, is_async, generics, has_self, params, ret, body, attrs, is_pub, span: lo.to(self.prev_span()) })
+        Ok(std::sync::Arc::new(FnDecl { name, is_async, generics, has_self, params, ret, body, attrs, is_pub, span: lo.to(self.prev_span()) }))
     }
 
     fn fields(&mut self) -> PResult<Vec<Field>> {
@@ -586,7 +589,7 @@ impl Parser {
             return None;
         }
         let save = self.pos;
-        let saved_toks = self.toks[self.pos..(self.pos + 64).min(self.toks.len())].to_vec();
+        let mark = self.splits.len();
         let res: PResult<Vec<TypeExpr>> = (|| {
             self.bump();
             let mut args = Vec::new();
@@ -606,8 +609,9 @@ impl Parser {
             Ok(args) if matches!(self.peek(), Tok::LParen | Tok::Dot) || (self.at(&Tok::LBrace) && !self.no_struct) => Some(args),
             _ => {
                 // restore any split tokens
-                for (i, t) in saved_toks.into_iter().enumerate() {
-                    self.toks[save + i] = t;
+                while self.splits.len() > mark {
+                    let (i, t) = self.splits.pop().unwrap();
+                    self.toks[i] = t;
                 }
                 self.pos = save;
                 None
